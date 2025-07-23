@@ -29,10 +29,10 @@ get_rcs <- function(x, knots) {
 }
 
 # --------------------------
-# calculate the offset value
-offset_rcs <- function(y_mean, x_mean, knots, coefs) {
-  res <- get_rcs(x_mean, knots)
-  sum <- sum(res*coefs[-1])
-  offset <- coefs[1] + sum - y_mean
-  return(offset)
+# define the function for `rootSolve::uniroot.all`
+fun_rcs <- function(x, object, y_mean, varname) {
+  df <- data.frame(var = x)
+  names(df) <- varname
+  res <- predict(object, newdata = df)-y_mean
+  return(res)
 }

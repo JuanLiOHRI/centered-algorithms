@@ -21,6 +21,7 @@ library(ggpubr)      # ggarrange
 library(car)         # sample data
 library(fastDummies) # make dummy variables
 library(rms)
+library(rootSolve)   # Nonlinear Root Finding, Equilibrium and Steady-State Analysis of Ordinary Differential Equations
 ```
 
 We will use the `car::Prestige` dataset for the examples.
@@ -300,7 +301,7 @@ ggplot(data, aes(income, prestige)) +
   theme_bw() 
 ```
 
-### Centered algorithm using *rcs*
+### Centered algorithm using *rcs*: using `x_mean`
 
 As expected, the *rcs* of the centered `income_C` is the *rcs* of `income` moving horizontally by `mean(data$income)`, *i.e.*, $\overline{x}$. As for coefficients of regression, the only difference is in `Intercept`, and the difference is by $\beta_{rcs_1}\overline{x}$. Unfortunately, the intercept of the centered algorithm is not equal to $\overline{y}$ like other scenarios above. And the predicted $y$ when $(x-\overline{x}) = 0$ using the centered algorithm is not equal to $\overline{y}$ either.
 
@@ -349,74 +350,42 @@ paste0("Mean prestige score in the dataset: ", mean(data$prestige))
 predict(fit.C, newdata = data.frame(income_C=0))
 ```
 
-However, the offset here is a constant given $\overline{x}$ and knot locations: $C_{offset} = (y|x=\overline{x})-\overline{y} = \beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}(x_{rcs_j}|x=\overline{x})}-\overline{y}$.
+### Centered algorithm using *rcs*: using an offset instead of `x_mean`
+
+From above, it confirms that when doing a horizontal shift, all $\beta$s except for the intercept remain unaffected. Therefore, the current task becomes to find a value $\tilde{x}$ that $\tilde{y}=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}\tilde{x}_{rcs_j}}= \overline{y}$ (_i.e._ the "root" below), and use it as the offset.
 
 ```{r}
-y_mean <- mean(data$prestige)
+root.income <- uniroot.all(fun_rcs, c(min(data$income),max(data$income)), object = fit, y_mean = mean(data$prestige), varname = "income")
 
-x_mean <- mean(data$income)
-knots <- attributes(rcs.fit)$parms # knot locations
-coefs <- coef(fit)
-(offset <- offset_rcs(y_mean, x_mean, knots, coefs))
+# the "centered" income
+data <- data %>% mutate(income_C2 = income-root.income)
 
-x_mean_C <- mean(data$income_C)
-knots_C <- attributes(rcs.fit.C)$parms # knot locations
-coefs_C <- coef(fit.C)
-(offset_C <- offset_rcs(y_mean, x_mean_C, knots_C, coefs_C))
-paste0("The predicted y when x-x_mean = 0 minus the offset: ", predict(fit.C, newdata = data.frame(income_C=0)) - offset_C) 
-paste0("Mean prestige score in the dataset: ", mean(data$prestige))
+ggplot(data, aes(income, prestige)) + 
+  geom_point(color = "blue")+
+  geom_hline(yintercept = mean(data$prestige), color = "black", linetype = "dashed") +
+  annotate("label", x = 21000, y = mean(data$prestige), label = "mean(data$prestige)", size = unit(3, "pt")) + 
+  geom_vline(xintercept = 0, linetype = "dashed")+
+  geom_smooth(method = "lm", formula = y ~ rcs(x,k), se = F)+
+  geom_vline(xintercept = mean(data$income), color = "red", linetype = "dashed")+
+  annotate("label", x = mean(data$income), y = 100, label = "mean(data$income)", size = unit(3, "pt")) +
+  geom_point(aes(income_C, prestige), color = "red")+
+  geom_smooth(aes(income_C, prestige), method = "lm", formula = y ~ rcs(x,k), color = "red", se = F)+
+  geom_vline(xintercept = root.income, color = "forestgreen", linetype = "dashed")+
+  annotate("label", x = root.income, y = 95, label = "root.income", size = unit(3, "pt")) +
+  geom_point(aes(income_C2, prestige), color = "forestgreen")+
+  geom_smooth(aes(income_C2, prestige), method = "lm", formula = y ~ rcs(x,k), color = "forestgreen", se = F)+
+  theme_bw() 
 ```
 
-### **Experiment:** when the predictor is normal distributed
-
-**Conclusion:** even when the predictor is normal distributed: (1) `mean(x)` and `median(x)` are close, but not identical; (2) `y ~ rcs(x-mean(x), k)` rarely across `mean(y)` when `x-mean(x)=0`.
+Note here, the intercept is not exactly equal to $\overline{y}$, but the fitted value when `x == root.income`, _i.e._ `x-root.income == 0` is equal to $\overline{y}$.
 
 ```{r}
-#| fig-height: 4
-#| fig-width: 10
+fit.C2 <- lm(prestige ~ rcs(income_C2,k), data = data)
+coef(fit.C2)
 
-# https://towardsdatascience.com/generate-simulated-dataset-for-linear-model-in-r-469a5e2f4c2e/
-expriment <- function(seed) {
-  set.seed(seed)
-  x1=rnorm(100,50,9)
-  x2=rnorm(100,200,64)
-  error=rnorm(100,0,16)
-  #Generate the dependent variable (b0=150, b1=-4, b2=2.5)
-  y=150-(4*x1)+(2.5*x2)+error
-  
-  df <- data.frame(x1=x1, 
-                   x2=x2, 
-                   y=y)
-  p1 <- ggplot(df, aes(x1, y)) + 
-    geom_point() +
-    geom_smooth(method = "lm", formula = y ~ x)+
-    geom_hline(yintercept = mean(df$y), color = "red", linetype = "dashed") +
-    annotate("label", x = 25, y = mean(df$y), label = "mean(df$y)", size = unit(3, "pt")) + 
-    geom_vline(xintercept = mean(df$x1), color = "red", linetype = "dashed")+
-    annotate("label", x = mean(df$x1), y = 900, label = "mean(df$x1)", size = unit(3, "pt")) +
-    theme_bw()+
-    labs(title = paste0("seed = ", seed))+
-    xlim(20,80)
-  
-  rcs.fit <- rcs(df$x1, 5)
-  knots <- attributes(rcs.fit)$parms
-  p2 <- ggplot(df, aes(x1, y)) + 
-    geom_point() +
-    geom_smooth(method = "lm", formula = y ~ rcs(x,5))+
-    geom_hline(yintercept = mean(df$y), color = "red", linetype = "dashed") +
-    annotate("label", x = 25, y = mean(df$y), label = "mean(df$y)", size = unit(3, "pt")) + 
-    geom_vline(xintercept = mean(df$x1), color = "red", linetype = "dashed")+
-    annotate("label", x = mean(df$x1), y = 900, label = "mean(df$x1)", size = unit(3, "pt")) +
-    geom_vline(xintercept = knots, color = "black", linetype = "dashed")+
-    theme_bw() +
-    labs(title = paste0("seed = ", seed))+
-    xlim(20,80)
-  print(ggarrange(p1, p2, ncol = 2))
-}
-
-expriment(14)
-expriment(100)
-expriment(5526)
+# prediction using the centered algorithm when x = 0
+paste0("Mean prestige score in the dataset: ", mean(data$prestige))
+predict(fit.C2, newdata = data.frame(income_C2=0))
 ```
 
 # Two predictors, no interaction
@@ -494,13 +463,19 @@ coef(fit)
 I will not repeat the math here, just use below code to confirm that values of coefficients other than the intercepts are not affected by centering.
 
 ```{r}
+fit <- lm(prestige ~ rcs(education,k), data = data)
+root.education <- uniroot.all(fun_rcs, c(min(data$education),max(data$education)), object = fit, y_mean = mean(data$prestige), varname = "education")
+data <- data %>% 
+  mutate(education_C2 = education - root.education)
+
 # --- linear regression model on `income` and `education` ---
 fit <- lm(prestige ~ rcs(income,k) + rcs(education,k), data = data)
 coef(fit)
 
 # --- linear regression model on centered variable `income_C` and `education_C` ---
-fit <- lm(prestige ~ rcs(income_C,k) + rcs(education_C,k), data = data)
+fit <- lm(prestige ~ rcs(income_C2,k) + rcs(education_C2,k), data = data)
 coef(fit)
+predict(fit, newdata = data.frame(income_C2 = 0, education_C2 = 0))
 ```
 
 ## Centered algorithm for a *categorical* predictor and a *continuous* predictor with *rcs*
@@ -513,18 +488,9 @@ fit <- lm(prestige ~ rcs(income,k) + type, data = data)
 coef(fit)
 
 # --- linear regression model on centered variable `income_C` ---
-fit_C <- lm(prestige ~ rcs(income_C,k) + type_prof_C + type_wc_C, data = data)
+fit_C <- lm(prestige ~ rcs(income_C2,k) + type_prof_C + type_wc_C, data = data)
 coef(fit_C)
-```
-
-```{r}
-##?????
-x_mean_C <- mean(data$income_C)
-knots_C <- attributes(rcs.fit.C)$parms # knot locations
-coefs_C <- coef(fit.C)
-(offset_C <- offset_rcs(y_mean, x_mean_C, knots_C, coefs_C))
-paste0("The predicted y when x-x_mean = 0 minus the offset: ", predict(fit.C, newdata = data.frame(income_C=0)) - offset_C) 
-paste0("Mean prestige score in the dataset: ", mean(data$prestige))
+predict(fit_C, newdata = data.frame(income_C2 = 0, type_prof_C = 0, type_wc_C = 0))
 ```
 
 # Two predictors, with interaction
