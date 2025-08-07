@@ -773,7 +773,7 @@ coef(fit)
 
 # --- Step 1: model with centered variables without rcs, and original variable with rcs ---
 fit <- lm(
-  y ~ x1_C + x2_cat2_C + x2_cat3_C + x3_C + rcs(x4, k_x4) + x5 + rcs(x6, k_x6),
+  y ~ x1_C + x2_cat2_C + x2_cat3_C + x3_C + rcs(x4, k_x4) + x5_C + rcs(x6, k_x6),
   data = data
 )
 coef(fit)
@@ -796,7 +796,7 @@ fit <- lm(
       x2_cat3_C +
       x3_C +
       rcs(x4_C5, k_x4) +
-      x5 +
+      x5_C +
       rcs(x6_C5, k_x6),
   data = data
 )
@@ -809,7 +809,7 @@ predict(
     x2_cat3_C = 0,
     x3_C = 0,
     x4_C5 = 0,
-    x5 = 0,
+    x5_C = 0,
     x6_C5 = 0
   )
 )
