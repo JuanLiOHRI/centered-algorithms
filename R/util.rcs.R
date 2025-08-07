@@ -30,9 +30,41 @@ get_rcs <- function(x, knots) {
 
 # --------------------------
 # define the function for `rootSolve::uniroot.all`
-fun_rcs <- function(x, object, y_mean, varname) {
-  df <- data.frame(var = x)
-  names(df) <- varname
-  res <- predict(object, newdata = df)-y_mean
-  return(res)
+fun_rcs <- function(x, object, y_mean, varname, knots = NULL) {
+  if (is.null(knots)) { # single predictor
+    df <- data.frame(var = x)
+    names(df) <- varname
+    result <- predict(object, newdata = df)-y_mean
+    return(result)
+  } else {
+    coefs <- coef(object)
+    coefs <- coefs[c(1,which(stringr::str_detect(names(coefs), varname)))]
+    rcs <- c(1, as.vector(get_rcs(x, knots))) # add intercept
+    result <- rcs %*% coefs - y_mean
+    return(result)
+  }
+}
+
+# --------------------------
+# A blunt-force solution for searching for 2 roots
+root.search <- function(model, rng1, rng2, varnames, y_mean, length.out = 101, err = 1e-4) {
+  df <- data.frame(
+    var1 = seq(rng1[1],rng1[2],length.out=length.out),
+    var2 = seq(rng2[1],rng2[2],length.out=length.out))
+  names(df) <- varnames
+  df$y <- predict(model, newdata = df)
+  df$diff <- df$y - y_mean
+  start <- df %>% filter(diff >= 0)
+  start <- start %>% filter(diff == min(diff))
+  end <- df %>% filter(diff < 0)
+  end <- end %>% filter(diff == max(diff))
+
+  if (abs(start$diff) <= err) {
+    return(start)
+  } else if (abs(end$diff) <= err) {
+    return(end)
+  } else {
+    root.search(model, rng1 = sort(c(start[,varnames[1]], end[,varnames[1]])), 
+      rng2 = sort(c(start[,varnames[2]], end[,varnames[2]])), varnames, y_mean, length.out, err)
+  }
 }

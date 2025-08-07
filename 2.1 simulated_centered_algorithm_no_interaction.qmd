@@ -1,0 +1,622 @@
+---
+title: "Centered algorithm with simulated data, without interaction"
+author: "Juan Li"
+date: 2025-08-05
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr)       # Data manipulation
+library(ggplot2)     # Data visualization
+library(ggpubr)      # ggarrange 
+library(fastDummies) # make dummy variables
+library(rms)
+##library(rootSolve)   # Nonlinear Root Finding, Equilibrium and Steady-State Analysis of Ordinary Differential Equations
+```
+
+# Simulate data for this tutorial
+
+Resources:
+
+-   [Creating simulated data sets in R](https://stirlingcodingclub.github.io/simulating_data/index.html)
+
+-   [Generate Simulated Dataset for Linear Model in R](https://towardsdatascience.com/generate-simulated-dataset-for-linear-model-in-r-469a5e2f4c2e/)
+
+For this tutorial, we will use a simulated dataset with the following predictors:
+
+-   `x1`: a categorical/dichotomous variable with 2 categories: `x1_cat1`, `x1_cat2`
+
+-   `x2`: a categorical variable with 3 categories: `x2_cat1`, `x2_cat2`, `x2_cat3`
+
+-   `x3`: a continuous variable with normal distribution, used as it is
+
+-   `x4`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x4 = 4`
+
+-   `x5`: a continuous variable with normal distribution, used as it is
+
+-   `x6`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x6 = 3`
+
+And we assume the outcome `y` is a linear combination of the predictors with some noise:
+
+$$
+\begin{split}
+y = & \beta_0 + \\
+& \beta_{1_{cat2}}x_{1_{cat2}} + \\
+& \beta_{2_{cat2}}x_{2_{cat2}} + \beta_{2_{cat3}}x_{2_{cat3}} + \\
+& \beta_3x_3 + \\
+& \sum_{j=1}^{k_{x4}-1}{\beta_{4_{rcs_j}}x_{4_{rcs_j}}} + \\
+& \beta_5x_5 + \\
+& \sum_{j=1}^{k_{x6}-1}{\beta_{6_{rcs_j}}x_{6_{rcs_j}}} 
+\end{split}
+$$
+
+```{r}
+n <- 1000
+seed <- 100
+
+set.seed(seed)
+data <- data.frame(
+  x1 = sample(c("x1_cat1", "x1_cat2"), size = n, replace = TRUE, prob = c(0.5, 0.5)),
+  x2 = sample(c("x2_cat1", "x2_cat2", "x2_cat3"), size = n, replace = TRUE, prob = c(0.1, 0.4, 0.5)),
+  x3 = rnorm(n, mean = 100, sd = 38),
+  x4 = rnorm(n, mean = 50, sd = 15),
+  x5 = rnorm(n, mean = 30, sd = 5),
+  x6 = rnorm(n, mean = 15, sd = 3),
+  error = rnorm(n, mean = 0, sd = 3)
+)
+table(data$x1)
+table(data$x2)
+
+# dummy variables
+data <- data %>% mutate(
+  x1_cat2 = ifelse(x1 == "x1_cat2", 1, 0),
+  x2_cat2 = ifelse(x2 == "x2_cat2", 1, 0),
+  x2_cat3 = ifelse(x2 == "x2_cat3", 1, 0)
+)
+
+# rcs
+k_x4 <- 4
+rcs.fit <- rcs(data$x4, k_x4)
+rcs.fit_x4 <- labelled::remove_attributes(rcs.fit, names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))])
+colnames(rcs.fit_x4) <- paste0("x4_rcs_", 1:(k_x4-1))
+
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+rcs.fit_x6 <- labelled::remove_attributes(rcs.fit, names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))])
+colnames(rcs.fit_x6) <- paste0("x6_rcs_", 1:(k_x6-1))
+
+data <- bind_cols(data, rcs.fit_x4, rcs.fit_x6)
+
+# outcome
+data <- data %>% mutate(
+  y = 100 + 
+    3*x1_cat2 + 
+    2*x2_cat2 + 0.5*x2_cat3 + 
+    10*x3 +
+    25*x4_rcs_1 + 18*x4_rcs_2 + 21*x4_rcs_3 -
+    6*x5 + 
+    0.6*x6_rcs_1 + 1.5*x6_rcs_2 +
+    error
+)
+
+head(data)
+
+# check
+fit <- lm(y ~ x1 + x2 + x3 + rcs(x4, k_x4) + x5 + rcs(x6, k_x6), data = data)
+coef(fit)
+```
+
+# One predictor
+
+## Centered algorithm with a *dichotomous* predictor
+
+Equation of a simple linear regression model: $y = \beta_0 + \beta_1x,\ x=0\ or\ 1$. Here, $\beta_0$ is the mean of $y$ when $x=0$, and $\beta_0 + \beta_1$ is the mean of $y$ when $x=1$. Now, change this into a centered algorithm, and the mean of $x$ is $\overline{x} = \frac{n_{x=1}}{n_{x=0}+n_{x=1}}$, we have
+
+$$
+\begin{split}
+y &= \beta_0 + \beta_1x \\
+&= \beta_0 + \beta_1(x-\overline{x}+\overline{x}) \\
+&= (\beta_0 + \beta_1\overline{x}) + \beta_1(x-\overline{x})
+\end{split}
+$$
+
+If set $\beta_{0,new} = \beta_0 + \beta_1\overline{x}$, then we have: $y = \beta_{0,new} + \beta_1(x-\overline{x})$
+
+Here, $\beta_{0,new}$ should be the mean of $y$ within the entire cohort, $\overline{y}$, let’s check:
+
+$$
+\begin{split}
+\beta_{0,new} 
+&= \beta_0+\beta_1\overline{x} \\
+&= \beta_0+\beta_1\frac{n_{x=1}}{n_{x=0}+n_{x=1}} \\
+&= \frac{\beta_0(n_{x=0}+n_{x=1}) + \beta_1n_{x=1}}{n_{x=0}+n_{x=1}} \\
+&= \frac{\beta_0n_{x=0} + (\beta_0 + \beta_1)n_{x=1}}{n_{x=0}+n_{x=1}} \\&= \overline{y}
+\end{split}
+$$
+
+**Therefore, the centered algorithm can be written as** $y = \overline{y} + \beta_1(x-\overline{x})$.
+
+```{r}
+#| warning: false
+#| message: false
+
+# centering
+prop.table(table(data$x1))
+(x_mean <- mean(data$x1_cat2))
+data <- data %>% 
+  mutate(x1_C = x1_cat2 - x_mean) 
+
+# --- linear regression model on `x1_cat2` ---
+paste0("Mean outcome if `x1_cat2 == 0`: ", mean(data$y[which(data$x1_cat2 == 0)]))
+paste0("Mean outcome if `x1_cat2 == 1`: ", mean(data$y[which(data$x1_cat2 == 1)]))
+fit <- lm(y ~ x1, data = data)
+coef(fit)
+sum(coef(fit)) # beta_0 + beta_1
+
+# --- linear regression model on centered variable `x1_C` ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm with a *categorical* predictor
+
+First, the categorical variable needs to be transformed into dummy variables. A categorical variable $x$ with $m$ levels: $cat_1$, $cat_2$,..., $cat_m$, can be transformed into $m-1$ dummy variables. Suppose $m=3$, then we have:
+
+$$
+x_{cat_2} =
+\begin{cases}
+1 ,& x = cat_2 \\
+0  ,& otherwise
+\end{cases}       
+$$
+
+and
+
+$$
+x_{cat_3} =
+\begin{cases}
+1 ,& x = cat_3 \\
+0  ,& otherwise
+\end{cases}       
+$$
+
+Then, when $x = cat_1$, $x_{cat_2} = x_{cat_3} = 0$.
+
+Equation of a simple linear regression model: $y = \beta_0 + \beta_{cat_2}x_{cat_2}+ \beta_{cat_3}x_{cat_3}$. Here, $\beta_0$ is the mean of $y$ when $x = cat_1$, $\beta_0 + \beta_{cat_2}$ is the mean of $y$ when $x=cat_2$, and $\beta_0 + \beta_{cat_3}$ is the mean of $y$ when $x=cat_3$. Now, change this into a centered algorithm:
+
+$$
+\begin{split}
+y &= \beta_0 + \beta_{cat_2}x_{cat_2} + \beta_{cat_3}x_{cat_3} \\
+&= \beta_0 + \beta_{cat_2}(x_{cat_2} - \overline{x_{cat_2}} + \overline{x_{cat_2}})  + \beta_{cat_3}(x_{cat_3} - \overline{x_{cat_3}} + \overline{x_{cat_3}}) \\
+&= (\beta_0 + \beta_{cat_2}\overline{x_{cat_2}} + \beta_{cat_3}\overline{x_{cat_3}}) + \beta_{cat_2}(x_{cat_2} - \overline{x_{cat_2}})  + \beta_{cat_3}(x_{cat_3} - \overline{x_{cat_3}})
+\end{split}
+$$
+
+If set $\beta_{0,new} = \beta_0 + \beta_{cat_2}\overline{x_{cat_2}} + \beta_{cat_3}\overline{x_{cat_3}}$, then we have: $y = \beta_{0,new} + \beta_{cat_2}(x_{cat_2} - \overline{x_{cat_2}})  + \beta_{cat_3}(x_{cat_3} - \overline{x_{cat_3}})$
+
+Here, $\beta_{0,new}$ should be the mean of $y$ within the entire cohort, $\overline{y}$, let’s check:
+
+$$
+\begin{split}
+\beta_{0,new} &= \beta_0+\beta_{cat_2}\overline{x_{cat_2}}+\beta_{cat_3}\overline{x_{cat_3}} \\
+&= \beta_0+\beta_{cat_2}\frac{n_{cat_2}}{n_{cat_1}+n_{cat_2}+n_{cat_3}}+\beta_{cat_3}\frac{n_{cat_3}}{n_{cat_1}+n_{cat_2}+n_{cat_3}} \\
+&= \frac{\beta_0(n_{cat_1}+n_{cat_2}+n_{cat_3}) + \beta_{cat_2}n_{cat_2} + \beta_{cat_3}n_{cat_3}}{n_{cat_1}+n_{cat_2}+n_{cat_3}} \\
+&= \frac{\beta_0n_{cat_1} + (\beta_0 + \beta_{cat_2})n_{cat_2} + (\beta_0 + \beta_{cat_3})n_{cat_3}}{n_{cat_1}+n_{cat_2}+n_{cat_3}} \\
+&= \overline{y}
+\end{split}
+$$
+
+Therefore, the centered algorithm can be written as $y = \overline{y} + \beta_{cat_2}(x_{cat_2} - \overline{x_{cat_2}})  + \beta_{cat_3}(x_{cat_3} - \overline{x_{cat_3}})$.
+
+```{r}
+#| warning: false
+#| message: false
+
+prop.table(table(data$x2))
+
+# centering
+(x2_cat2_mean <- mean(data$x2_cat2))
+(x2_cat3_mean <- mean(data$x2_cat3))
+data <- data %>% 
+  mutate(x2_cat2_C = x2_cat2 - x2_cat2_mean,
+         x2_cat3_C = x2_cat3 - x2_cat3_mean)
+
+# --- linear regression model on `x2` ---"
+paste0("Mean outcome if `x2 == x2_cat1`: ", mean(data$y[which(data$x2 == "x2_cat1")]))
+paste0("Mean outcome if `x2 == x2_cat2`: ", mean(data$y[which(data$x2 == "x2_cat2")]))
+paste0("Mean outcome if `x2 == x2_cat3`: ", mean(data$y[which(data$x2 == "x2_cat3")]))
+fit <- lm(y ~ x2, data = data)
+coef(fit)
+sum(coef(fit)[c(1,2)]) # beta_0 + beta_cat_2
+sum(coef(fit)[c(1,3)]) # beta_0 + beta_cat_3
+
+# --- linear regression model on `x2_cat2 + x2_cat3` ---"
+# confirm that the results are the same as above
+fit <- lm(y ~ x2_cat2 + x2_cat3, data = data)
+coef(fit)
+
+# --- linear regression model on centered variable `x2_cat2_C + x2_cat3_C` ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C + x2_cat3_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm with a *continuous* predictor as it is
+
+Equation of a simple linear regression model: $y = \beta_0 + \beta_1x$. Here, $\beta_0$ is the value of $y$ when $x=0$, and $\beta_1$ is the change of $y$ when $x$ increases by 1. Now, change this into a centered algorithm, we have
+
+$$
+\begin{split}
+y &= \beta_0 + \beta_1x \\
+&= \beta_0 + \beta_1(x-\overline{x}+\overline{x}) \\
+&= (\beta_0 + \beta_1\overline{x}) + \beta_1(x-\overline{x})
+\end{split}
+$$
+
+If set $\beta_{0,new} = \beta_0 + \beta_1\overline{x}$, then we have: $y = \beta_{0,new} + \beta_1(x-\overline{x})$. Note by definition of linear regression, the value of $y$ when $x=\overline{x}$ is also $\beta_0 + \beta_1\overline{x}$.
+
+Here, $\beta_{0,new}$ should be the mean of $y$ within the entire cohort, $\overline{y}$, let’s check:
+
+$$
+\begin{split}
+\beta_{0,new} &= \beta_0+\beta_1\overline{x} \\
+&= \beta_0+\beta_1\frac{\sum_i^n(x_i)}{n} \\
+&= \frac{n\beta_0 + \beta_1\sum_i^n(x_i)}{n} \\
+&= \frac{\sum_i^n(\beta_0 + \beta_1x_i)}{n} \\
+&= \frac{\sum_i^ny_i}{n} \\
+&= \overline{y}
+\end{split}
+$$
+
+**Therefore, the centered algorithm can be written as** $y = \overline{y} + \beta_1(x-\overline{x})$.
+
+```{r}
+(x_mean <- mean(data$x3))
+data <- data %>% 
+  mutate(x3_C = x3 - x_mean)
+
+# Using the centered `x3_C` (red) instead of `x3` (blue) essentially moves the data horizontally to the left by `x_mean`.
+ggplot(data, aes(x3, y)) + 
+  geom_point(color = "blue", alpha = 0.1)+
+  geom_hline(yintercept = mean(data$y), color = "black", linetype = "dashed") +
+  annotate("label", x = max(data$x3), y = mean(data$y), label = "mean(data$y)", size = unit(3, "pt")) + 
+  geom_vline(xintercept = mean(data$x3), color = "black", linetype = "dashed")+
+  annotate("label", x = mean(data$x3), y = max(data$y), label = "mean(data$x3)", size = unit(3, "pt")) +
+  geom_vline(xintercept = 0, linetype = "dashed")+
+  geom_smooth(method = "lm", formula = "y ~ x")+
+  geom_point(aes(x3_C, y), color = "red", alpha = 0.1)+
+  geom_smooth(aes(x3_C, y), method = "lm", formula = "y ~ x", color = "red")+
+  theme_bw() 
+
+paste0("Mean outcome in the dataset: ", mean(data$y))
+
+# --- linear regression model on `x3` ---
+fit <- lm(y ~ x3, data = data)
+coef(fit)
+coef(fit)[1] + coef(fit)[2] * x_mean
+
+# --- linear regression model on centered variable `x3_C` ---
+fit <- lm(y ~ x3_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm with a *continuous* predictor using *restricted cubic spline (rcs)*
+
+The linear regression with a *rcs* with $k$ knots can be written as $y=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}x_{rcs_j}}$.
+
+### Components of rcs
+
+Below we use `rms::rcs`, for more information, like the default knot locations, see `?Hmisc::rcspline.eval`.
+
+Equations for restricted cubic spline with $j = 1,...,k$ knots:
+
+$x_{rcs_1} = x,\ j=1$
+
+$x_{rcs_{j}} = {(\frac{x-knot_{j-1}}{(knot_k-knot_1)^{\frac{2}{3}}})}_+^{3} + \frac{(knot_{k-1}-knot_{j-1}){(\frac{x-knot_k}{(knot_k-knot_1)^{\frac{2}{3}}})}_+^{3}- (knot_k-knot_{j-1}){(\frac{x-knot_{k-1}}{(knot_k-knot_1)^{\frac{2}{3}}})}_+^{3}}{knot_k-knot_{k-1}},\ j=2,...,k-1$
+
+where:
+
+$$
+(x - knot)_+ = 
+\begin{cases}
+x - knot&,\ x - knot>0 \\
+0&, \ x - knot\le0
+\end{cases}
+$$
+
+In the example below, we use $k = 4$:
+
+```{r}
+#| message: false
+
+# check above formula
+rcs.fit <- rcs(data$x4, k_x4)
+knots <- attributes(rcs.fit)$parms # knot locations
+res <- labelled::remove_attributes(rcs.fit, names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]) # don't print the attributes
+print(head(res))
+
+source("R/util.rcs.R", echo = TRUE) 
+res <- get_rcs(data$x4, knots)
+print(head(res))
+```
+
+### Linear regression with *rcs*
+
+However, the coefficients of $y=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}x_{rcs_j}}$ no longer have the explainability like the simple linear regression. **Note:** based on the knot locations, when $x_{rcs_j}=0$, $\sum_{j=1}^{k-1}{\beta_{rcs_j}x_{rcs_j}}$ is not necessarily equal to $0$, therefore $\beta_0$ doesn't represent the value of $y$ when $x_{rcs_j}=0$. Also, when $x=\overline{x}$, the predicted $y$ is not equal to $\overline{y}$, see the figure below: where the linear regression lines of `y ~ x4` and `y ~ rcs(x4,k)` are represented by black and blue, respectively.
+
+```{r}
+ggplot(data, aes(x4, y)) + 
+  geom_point(color = "blue", alpha = 0.1)+
+  geom_hline(yintercept = mean(data$y), color = "red", linetype = "dashed", linewidth = 1) +
+  annotate("label", x = max(data$x4), y = mean(data$y), label = "mean(data$y)", size = unit(3, "pt")) + 
+  geom_vline(xintercept = mean(data$x4), color = "red", linetype = "dashed", linewidth = 1)+
+  annotate("label", x = mean(data$x4), y = max(data$y), label = "mean(data$x4)", size = unit(3, "pt")) +
+  geom_smooth(method = "lm", formula = y ~ x, color = "black", se = F)+
+  geom_smooth(method = "lm", formula = y ~ rcs(x,k_x4), color = "blue", se = F)+
+  geom_vline(xintercept = attributes(rcs.fit)$parms, color = "blue", linetype = "dashed")+
+  annotate("label", x = attributes(rcs.fit)$parms, y = max(data$y)*0.9, label = paste0("knot ", 1:k_x4), size = unit(3, "pt")) +
+  theme_bw() 
+```
+
+### Centered algorithm using *rcs*: using `x_mean`
+
+As expected, the *rcs* of the centered `x4_C` is the *rcs* of `x4` moving horizontally by `mean(data$x4)`, *i.e.*, $\overline{x}$. As for coefficients of regression, the only difference is in `Intercept`, and the difference is by $\beta_{rcs_1}\overline{x}$. Unfortunately, the intercept of the centered algorithm is not equal to $\overline{y}$ like other scenarios above. And the predicted $y$ when $(x-\overline{x}) = 0$ using the centered algorithm is not equal to $\overline{y}$ either.
+
+```{r}
+(x_mean <- mean(data$x4))
+data <- data %>% 
+  mutate(x4_C = x4 - x_mean)
+
+ggplot(data, aes(x4, y)) + 
+  geom_point(color = "blue", alpha = 0.1)+
+  geom_hline(yintercept = mean(data$y), color = "black", linetype = "dashed") +
+  annotate("label", x = max(data$x4), y = mean(data$y), label = "mean(data$y)", size = unit(3, "pt")) + 
+  geom_vline(xintercept = mean(data$x4), color = "black", linetype = "dashed")+
+  annotate("label", x = mean(data$x4), y = max(data$y), label = "mean(data$x4)", size = unit(3, "pt")) +
+  geom_vline(xintercept = 0, linetype = "dashed")+
+  geom_smooth(method = "lm", formula = y ~ rcs(x,k_x4))+
+  geom_point(aes(x4_C, y), color = "red", alpha = 0.1)+
+  geom_smooth(aes(x4_C, y), method = "lm", formula = y ~ rcs(x,k_x4), color = "red")+
+  theme_bw() 
+
+rcs.fit <- rcs(data$x4, k_x4)
+# knot locations
+attributes(rcs.fit)$parms
+
+# knot locations when using `x4_C`
+rcs.fit.C <- rcs(data$x4_C, k_x4)
+attributes(rcs.fit.C)$parms
+attributes(rcs.fit.C)$parms + x_mean
+
+# And only the `data` column is affected, 
+# for other columns, the horizontal change was cancelled out.
+head(labelled::remove_attributes(rcs.fit, names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))])) # don't print the attributes
+head(labelled::remove_attributes(rcs.fit.C, names(attributes(rcs.fit.C))[3:length(names(attributes(rcs.fit.C)))])) # don't print the attributes
+```
+
+```{r}
+# --- linear regression model on `rcs(x4,k_x4)` ---
+fit <- lm(y ~ rcs(x4,k_x4), data = data)
+coef(fit)
+
+# --- linear regression model on centered variable `rcs(x4_C,k_x4)` ---
+fit.C <- lm(y ~ rcs(x4_C,k_x4), data = data)
+coef(fit.C)
+
+# difference between the two intercepts
+coef(fit)[1] + coef(fit)[2]*x_mean
+
+# prediction using the centered algorithm when x = 0
+paste0("Mean outcome in the dataset: ", mean(data$y))
+predict(fit.C, newdata = data.frame(x4_C=0))
+```
+
+### Centered algorithm using *rcs*: using an offset instead of `x_mean`
+
+From above, it confirms that when doing a horizontal shift, all $\beta$s except for the intercept remain unaffected. Therefore, the current task becomes to find a value $\tilde{x}$ that $\tilde{y}=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}\tilde{x}_{rcs_j}}= \overline{y}$ (*i.e.* the "root" below), and use it as the offset.
+
+```{r}
+# --- linear regression model on `rcs(x4,k_x4)` ---
+fit <- lm(y ~ rcs(x4,k_x4), data = data)
+coef(fit)
+root.x4 <- uniroot(fun_rcs, c(min(data$x4),max(data$x4)), object = fit, y_mean = mean(data$y), varname = "x4") #stats::uniroot
+root.x4 <- root.x4$root
+
+# the "centered" x4
+data <- data %>% mutate(x4_C2 = x4-root.x4)
+
+ggplot(data, aes(x4, y)) + 
+  geom_point(color = "blue", alpha = 0.1)+
+  geom_hline(yintercept = mean(data$y), color = "black", linetype = "dashed") +
+  annotate("label", x = max(data$x4), y = mean(data$y), label = "mean(data$y)", size = unit(3, "pt")) + 
+  geom_vline(xintercept = 0, linetype = "dashed")+
+  geom_smooth(method = "lm", formula = y ~ rcs(x,k_x4), se = F)+
+  geom_vline(xintercept = mean(data$x4), color = "red", linetype = "dashed")+
+  annotate("label", x = mean(data$x4), y = max(data$y), label = "mean(data$x4)", size = unit(3, "pt")) +
+  geom_point(aes(x4_C, y), color = "red", alpha = 0.1)+
+  geom_smooth(aes(x4_C, y), method = "lm", formula = y ~ rcs(x,k_x4), color = "red", se = F)+
+  geom_vline(xintercept = root.x4, color = "forestgreen", linetype = "dashed")+
+  annotate("label", x = root.x4, y = max(data$y)*0.9, label = "root.x4", size = unit(3, "pt")) +
+  geom_point(aes(x4_C2, y), color = "forestgreen", alpha = 0.1)+
+  geom_smooth(aes(x4_C2, y), method = "lm", formula = y ~ rcs(x,k_x4), color = "forestgreen", se = F)+
+  theme_bw() 
+```
+
+Note here, the intercept is not exactly equal to $\overline{y}$, but the fitted value when `x == root.x4`, *i.e.* `x-root.x4 == 0` is equal to $\overline{y}$.
+
+```{r}
+fit.C2 <- lm(y ~ rcs(x4_C2,k_x4), data = data)
+coef(fit.C2)
+
+# prediction using the centered algorithm when x = 0
+paste0("Mean outcome in the dataset: ", mean(data$y))
+predict(fit.C2, newdata = data.frame(x4_C2=0))
+```
+
+# Two predictors
+
+## Centered algorithm for two *categorical* predictors
+
+I will not repeat the math here, just use below code to confirm that the intercept ($\beta_0$) of the centered algorithm is still $\overline{y}$, and values of other coefficients are not affected by centering.
+
+```{r}
+# --- linear regression model on `x1` and `x2` ---"
+fit <- lm(y ~ x1 + x2, data = data)
+coef(fit)
+
+# --- linear regression model on centered variable ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_C + x2_cat2_C + x2_cat3_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm for a *categorical* predictor and a *continuous* predictor
+
+I will not repeat the math here, just use below code to confirm that the intercept ($\beta_0$) of the centered algorithm is still $\overline{y}$, and values of other coefficients are not affected by centering.
+
+```{r}
+# --- linear regression model on `x2`, `x3` ---
+fit <- lm(y ~ x2 + x3, data = data)
+coef(fit)
+
+# --- linear regression model on centered variable ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C + x2_cat3_C + x3_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm for two *continuous* predictors without rcs
+
+I will not repeat the math here, just use below code to confirm that the intercept ($\beta_0$) of the centered algorithm is still $\overline{y}$, and values of other coefficients are not affected by centering.
+
+```{r}
+x_mean <- mean(data$x5)
+data <- data %>% 
+  mutate(x5_C = x5 - x_mean)
+
+# --- linear regression model on `x3` and `x5` ---
+fit <- lm(y ~ x3 + x5, data = data)
+coef(fit)
+
+# --- linear regression model on centered variable `x3_C` and `x5_C` ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C + x5_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm for a *categorical* predictor and a *continuous* predictor with *rcs*
+
+Note:
+
+1.  In order to find the root, one needs to first fit a regression using the **centered** categorical variable, and then use `stats::uniroot` to find the root.
+
+2.  In the centered algorithm, after centering both variables, the intercept is not exactly $\overline{y}$, but the predicted value when all variables equal to 0 is equal to $\overline{y}$.
+
+```{r}
+# --- linear regression model on centered categotical variables and `rcs(x4, k_x4)` ---
+fit <- lm(y ~ x2_cat2_C + x2_cat3_C + rcs(x4, k_x4), data = data)
+(coefs <- coef(fit))
+# finding the root for x4
+rcs.fit <- rcs(data$x4, k_x4)
+root.x4 <- uniroot(fun_rcs, c(min(data$x4),max(data$x4)), object = fit, y_mean = mean(data$y), varname = "x4", knots = attributes(rcs.fit)$parms) #stats::uniroot
+root.x4 <- root.x4$root
+# the "centered" x4
+data <- data %>% mutate(x4_C3 = x4-root.x4)
+
+# --- linear regression model on centered categotical variables and centered `rcs(x4_C3, k_x4)` ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C + x2_cat3_C + rcs(x4_C3, k_x4), data = data)
+coef(fit)
+predict(fit, newdata = data.frame(x2_cat2_C = 0, x2_cat3_C  = 0, x4_C3 = 0))
+```
+
+## Centered algorithm for one *continuous* predictor without rcs and one with rcs
+
+Note:
+
+1.  In order to find the root, one needs to first fit a regression using the **centered** continuous variable (without rcs), and then use `stats::uniroot` to find the root.
+
+2.  In the centered algorithm, after centering both variables, the intercept is not exactly $\overline{y}$, but the predicted value when all variables equal to 0 is equal to $\overline{y}$.
+
+```{r}
+# --- linear regression model on centered `x3_C` and `rcs(x4, k_x4)` ---
+fit <- lm(y ~ x3_C + rcs(x4, k_x4), data = data)
+(coefs <- coef(fit))
+# finding the root for x4
+rcs.fit <- rcs(data$x4, k_x4)
+root.x4 <- uniroot(fun_rcs, c(min(data$x4),max(data$x4)), object = fit, y_mean = mean(data$y), varname = "x4", knots = attributes(rcs.fit)$parms) #stats::uniroot
+root.x4 <- root.x4$root
+# the "centered" x4
+data <- data %>% mutate(x4_C3 = x4-root.x4)
+
+# --- linear regression model on centered variable `x3_C` and `rcs(x4_C3, k_x4)` ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C + rcs(x4_C3, k_x4), data = data)
+coef(fit)
+predict(fit, newdata = data.frame(x3_C = 0, x4_C3 = 0))
+```
+
+## Centered algorithm for two *continuous* predictors with *rcs*
+
+Using plotly to visualize
+
+```{r}
+# ref: https://forum.posit.co/t/3d-plotly-scatter-plot-with-2d-plane/43899
+# ref: https://stackoverflow.com/questions/44322350/add-regression-plane-in-r-using-plotly
+
+library(plotly)
+
+fig <- plot_ly(data, x = ~x4, y = ~x6, z = ~y)
+fig <- fig %>% add_markers(size=1, opacity = 0.7)
+
+# add the horizontal plane at z == mean(data$y)
+df_h <- data.frame(x = rep(range(data$x4), 2), y = rep(range(data$x6), each = 2), z = mean(data$y)) # df for the horizontal plane
+fig <- fig %>% add_mesh(x = ~x, y = ~y, z = ~z, data = df_h, opacity = 0.3)
+
+# add the regression plane
+length.out <- 101
+fit <- lm(y ~ rcs(x4,k_x4) + rcs(x6,k_x6), data = data)
+df_r <- data.frame(
+  x4 = seq(min(data$x4),max(data$x4),length.out=length.out),
+  x6 = seq(min(data$x6),max(data$x6),length.out=length.out))
+df_r$y <- predict(fit, newdata = df_r)
+fig <- fig %>% add_trace(x = ~x4, y = ~x6, z = ~y, data = df_r, size = 2, type="scatter3d", mode = "markers")
+
+fig
+```
+
+```{r}
+# --- Step 1: linear regression model on `rcs(x4,k_x4)` and `rcs(x6,k_x6)` ---
+fit <- lm(y ~ rcs(x4,k_x4) + rcs(x6,k_x6), data = data)
+coef(fit)
+
+# --- Step 2: finding the roots ---
+res <- root.search(model = fit, rng1 = c(min(data$x4),max(data$x4)), rng2 = c(min(data$x6),max(data$x6)), 
+  varnames = c("x4","x6"), y_mean = mean(data$y))
+
+# --- Step 3: "centering" x4 ---
+data <- data %>% 
+  mutate(x4_C4 = x4 - res$x4,
+  x6_C4 = x6 - res$x6)
+
+# --- Step 3: linear regression model on centered variable `rcs(x4_C4,k_x4)` and `rcs(x6_C4,k_x6)` ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ rcs(x4_C4,k_x4) + rcs(x6_C4,k_x6), data = data)
+coef(fit)
+predict(fit, newdata = data.frame(x4_C4 = 0, x6_C4 = 0))
+```
+
+
+```{r}
+
+```

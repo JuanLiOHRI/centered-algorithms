@@ -352,7 +352,7 @@ predict(fit.C, newdata = data.frame(income_C=0))
 
 ### Centered algorithm using *rcs*: using an offset instead of `x_mean`
 
-From above, it confirms that when doing a horizontal shift, all $\beta$s except for the intercept remain unaffected. Therefore, the current task becomes to find a value $\tilde{x}$ that $\tilde{y}=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}\tilde{x}_{rcs_j}}= \overline{y}$ (_i.e._ the "root" below), and use it as the offset.
+From above, it confirms that when doing a horizontal shift, all $\beta$s except for the intercept remain unaffected. Therefore, the current task becomes to find a value $\tilde{x}$ that $\tilde{y}=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}\tilde{x}_{rcs_j}}= \overline{y}$ (*i.e.* the "root" below), and use it as the offset.
 
 ```{r}
 root.income <- uniroot.all(fun_rcs, c(min(data$income),max(data$income)), object = fit, y_mean = mean(data$prestige), varname = "income")
@@ -377,7 +377,7 @@ ggplot(data, aes(income, prestige)) +
   theme_bw() 
 ```
 
-Note here, the intercept is not exactly equal to $\overline{y}$, but the fitted value when `x == root.income`, _i.e._ `x-root.income == 0` is equal to $\overline{y}$.
+Note here, the intercept is not exactly equal to $\overline{y}$, but the fitted value when `x == root.income`, *i.e.* `x-root.income == 0` is equal to $\overline{y}$.
 
 ```{r}
 fit.C2 <- lm(prestige ~ rcs(income_C2,k), data = data)
