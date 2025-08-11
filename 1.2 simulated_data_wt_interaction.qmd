@@ -1,0 +1,356 @@
+---
+title: "Centered algorithm with simulated data, with interaction"
+author: "Juan Li"
+date: 2025-08-11
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(fastDummies) # make dummy variables
+library(rms)
+```
+
+# Simulate data for this tutorial
+
+Resources:
+
+-   [Creating simulated data sets in R](https://stirlingcodingclub.github.io/simulating_data/index.html)
+
+-   [Generate Simulated Dataset for Linear Model in R](https://towardsdatascience.com/generate-simulated-dataset-for-linear-model-in-r-469a5e2f4c2e/)
+
+For this tutorial, we will use a simulated dataset with the following predictors:
+
+-   `x1`: a categorical/dichotomous variable with 2 categories: `x1_cat1`, `x1_cat2`
+
+-   `x2`: a categorical variable with 3 categories: `x2_cat1`, `x2_cat2`, `x2_cat3`
+
+-   `x3`: a continuous variable with normal distribution, used as it is
+
+-   `x4`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x4 = 4`
+
+-   `x5`: a continuous variable with normal distribution, used as it is
+
+-   `x6`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x6 = 3`
+
+And we assume the outcome `y` is a linear combination of the predictors with some noise, and different kinds of interactions:
+
+-   Interaction of two categorical variables: `x1`, `x2`
+
+-   Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
+
+-   Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
+
+-   Interaction of two continuous variables (no rcs): `x3`, `x5`
+
+-   TODO: Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
+
+-   TODO: Interaction of two continuous variables (with rcs): `x4`, `x6`
+
+```{r}
+n <- 1000
+seed <- 567
+
+set.seed(seed)
+data <- data.frame(
+  x1 = sample(
+    c("x1_cat1", "x1_cat2"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.5, 0.5)
+  ),
+  x2 = sample(
+    c("x2_cat1", "x2_cat2", "x2_cat3"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.1, 0.4, 0.5)
+  ),
+  x3 = rnorm(n, mean = 100, sd = 38),
+  x4 = rnorm(n, mean = 50, sd = 15),
+  x5 = rnorm(n, mean = 30, sd = 5),
+  x6 = rnorm(n, mean = 15, sd = 3),
+  error = rnorm(n, mean = 0, sd = 3)
+)
+table(data$x1)
+table(data$x2)
+
+# dummy variables
+data <- data %>%
+  mutate(
+    x1_cat2 = ifelse(x1 == 'x1_cat2', 1, 0),
+    x2_cat2 = ifelse(x2 == 'x2_cat2', 1, 0),
+    x2_cat3 = ifelse(x2 == 'x2_cat3', 1, 0)
+  )
+
+# rcs
+k_x4 <- 4
+rcs.fit <- rcs(data$x4, k_x4)
+rcs.fit_x4 <- labelled::remove_attributes(
+  rcs.fit,
+  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
+)
+colnames(rcs.fit_x4) <- paste0("x4_rcs_", 1:(k_x4 - 1))
+
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+rcs.fit_x6 <- labelled::remove_attributes(
+  rcs.fit,
+  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
+)
+colnames(rcs.fit_x6) <- paste0("x6_rcs_", 1:(k_x6 - 1))
+
+data <- bind_cols(data, rcs.fit_x4, rcs.fit_x6)
+
+# outcome
+data <- data %>%
+  mutate(x3_x5_interaction = x3 * x5) %>%
+  mutate(
+    y = case_when(
+      x2 == "x2_cat1" ~ 100 +
+      3 * x1_cat2 +
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      10 * x3 +
+      25 * x4_rcs_1 +
+      18 * x4_rcs_2 +
+      21 * x4_rcs_3 -
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_x5_interaction +
+      error,
+    x2 == "x2_cat2" ~ 100 +
+      5 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      21 * x3 +        # change based on value of x2
+      8 * x4_rcs_1 +  # change based on value of x2
+      36 * x4_rcs_2 +  # change based on value of x2
+      14 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_x5_interaction +
+      error,
+    x2 == "x2_cat3" ~ 100 +
+      7 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      5 * x3 +         # change based on value of x2
+      2.5 * x4_rcs_1 + # change based on value of x2
+      40 * x4_rcs_2 +  # change based on value of x2
+      16 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_x5_interaction +
+      error
+  ))
+
+head(data)
+```
+
+# Interaction of two categorical variables: `x1`, `x2`
+
+- With directly centering (see __Scenario 1__ below), the intercept is very close to $\overline{y}$, but not identical.
+
+- From below code, it can be seen that we should do _conditional centering_ on one of the categorical variables, while do the other one with _directly centering_ (no matter the order, see __Scenario 3__ and __Scenario 4__), but __should NOT do _conditional centering_ on both variables__ (see __Scenario 2__).
+
+- With the proper centering (considering the interaction term), the intercept is equal to $\overline{y}$. But the coefficients of non-interaction terms are affected as well.
+
+```{r}
+#| warning: false
+#| message: false
+
+# -------- directly centering -------- 
+# centering x1
+prop.table(table(data$x1))
+(x1_mean <- mean(data$x1_cat2))
+data <- data %>%
+  mutate(x1_C = x1_cat2 - x1_mean)
+
+# centering x2
+(x2_cat2_mean <- mean(data$x2_cat2))
+(x2_cat3_mean <- mean(data$x2_cat3))
+data <- data %>%
+  mutate(x2_cat2_C = x2_cat2 - x2_cat2_mean, x2_cat3_C = x2_cat3 - x2_cat3_mean)
+
+# -------- conditional centering -------- 
+# centering x1 considering x2
+(x1_mean_1 <- mean(data$x1_cat2[which(data$x2 == 'x2_cat1')]))
+(x1_mean_2 <- mean(data$x1_cat2[which(data$x2 == 'x2_cat2')]))
+(x1_mean_3 <- mean(data$x1_cat2[which(data$x2 == 'x2_cat3')]))
+data <- data %>%
+  mutate(
+    x1_C2 = case_when(
+      x2 == 'x2_cat1' ~ x1_cat2 - x1_mean_1,
+      x2 == 'x2_cat2' ~ x1_cat2 - x1_mean_2,
+      x2 == 'x2_cat3' ~ x1_cat2 - x1_mean_3
+    )
+  )
+
+# centering x2 considering x1
+(x2_cat2_mean_1 <- mean(data$x2_cat2[which(data$x1 == 'x1_cat1')]))
+(x2_cat2_mean_2 <- mean(data$x2_cat2[which(data$x1 == 'x1_cat2')]))
+(x2_cat3_mean_1 <- mean(data$x2_cat3[which(data$x1 == 'x1_cat1')]))
+(x2_cat3_mean_2 <- mean(data$x2_cat3[which(data$x1 == 'x1_cat2')]))
+data <- data %>%
+  mutate(
+    x2_cat2_C2 = case_when(
+      x1 == 'x1_cat1' ~ x2_cat2 - x2_cat2_mean_1,
+      x1 == 'x1_cat2' ~ x2_cat2 - x2_cat2_mean_2
+    ),
+    x2_cat3_C2 = case_when(
+      x1 == 'x1_cat1' ~ x2_cat3 - x2_cat3_mean_1,
+      x1 == 'x1_cat2' ~ x2_cat3 - x2_cat3_mean_2
+    )
+  )
+
+# --- linear regression model on original variables: `x1`, 'x2' ---
+fit <- lm(y ~ x1 * x2, data = data)
+coef(fit)
+
+# --- linear regression model on dummy variables: `x1_cat2`, `x2_cat2`, `x2_cat3` ---
+# to confirm it's the same as above
+fit <- lm(y ~ x1_cat2 * x2_cat2 + x1_cat2 * x2_cat3, data = data)
+coef(fit)
+
+# --- Scenario 1: linear regression model on centered variables: 'x1_C', 'x2_cat2_C', 'x2_cat3_C' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_C * x2_cat2_C + x1_C * x2_cat3_C, data = data)
+coef(fit)
+
+# --- Scenario 2: linear regression model on centered variables: 'x1_C2', 'x2_cat2_C2', 'x2_cat3_C2' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_C2 * x2_cat2_C2 + x1_C2 * x2_cat3_C2, data = data)
+coef(fit)
+
+# --- Scenario 3: linear regression model on centered variables: 'x1_C2', 'x2_cat2_C', 'x2_cat3_C' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_C2 * x2_cat2_C + x1_C2 * x2_cat3_C, data = data)
+coef(fit)
+
+# --- Scenario 4: linear regression model on centered variables: 'x1_C', 'x2_cat2_C2', 'x2_cat3_C2' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_C * x2_cat2_C2 + x1_C * x2_cat3_C2, data = data)
+coef(fit)
+```
+
+# Interaction of one categorical variable and one continuous variabl (no rcs): `x1`, `x3`
+
+- With directly centering (see __Scenario 1__ below), the intercept is very close to $\overline{y}$, but not identical.
+
+- From below code, it can be seen that we should do _conditional centering_ on the continuous variable, while do _directly centering_ on the categorical variable (see __Scenario 2__).
+
+- With the proper centering (considering the interaction term), the intercept is equal to $\overline{y}$. But the coefficients of non-interaction terms are affected as well.
+
+```{r}
+#| warning: false
+#| message: false
+
+# -------- directly centering -------- 
+# centering x3 
+(x3_mean <- mean(data$x3))
+data <- data %>%
+  mutate(x3_C = x3 - x3_mean)
+
+# -------- conditional centering -------- 
+# centering x3 considering x2
+(x3_mean_1 <- mean(data$x3[which(data$x2 == 'x2_cat1')]))
+(x3_mean_2 <- mean(data$x3[which(data$x2 == 'x2_cat2')]))
+(x3_mean_3 <- mean(data$x3[which(data$x2 == 'x2_cat3')]))
+data <- data %>%
+  mutate(
+    x3_C2 = case_when(
+      x2 == 'x2_cat1' ~ x3 - x3_mean_1,
+      x2 == 'x2_cat2' ~ x3 - x3_mean_2,
+      x2 == 'x2_cat3' ~ x3 - x3_mean_3
+    )
+  )
+
+# --- linear regression model on original variables: 'x2', 'x3' ---
+fit <- lm(y ~ x2 * x3, data = data)
+coef(fit)
+
+# --- linear regression model on dummy variables: 'x2_cat2', 'x2_cat3', 'x3' ---
+# to confirm it's the same as above
+fit <- lm(y ~ x2_cat2 * x3 + x2_cat3 * x3, data = data)
+coef(fit)
+
+# --- Scenario 1: linear regression model on centered variables 'x2_cat2_C', 'x2_cat3_C', 'x3_C' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C * x3_C + x2_cat3_C * x3_C, data = data)
+coef(fit)
+
+# --- Scenario 2: linear regression model on centered variables 'x2_cat2_C', 'x2_cat3_C', 'x3_C2' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C * x3_C2 + x2_cat3_C * x3_C2, data = data)
+coef(fit)
+```
+
+# Interaction of two continuous variabl (no rcs): `x3`, `x5`
+
+- There are two methods to center the interaction term:
+
+  -   product of the two centered variables: `x3_C * x5_C` (see __Scenario 1__, __Scenario 2__)
+
+  -   center the original interaction term: `x3_x5_interaction - x3_x5_interaction_mean` (see __Scenario 3__)
+
+- Below code confirms that the second method is correct one
+
+```{r}
+#| warning: false
+#| message: false
+
+# centering x5
+(x5_mean <- mean(data$x5))
+data <- data %>%
+  mutate(x5_C = x5 - x5_mean)
+
+# centering x3*x5: two methods
+(x3_x5_interaction_mean <- mean(data$x3_x5_interaction))
+data <- data %>%
+  mutate(
+    x3_x5_interaction_C = x3_C * x5_C,
+    x3_x5_interaction_C2 = x3_x5_interaction - x3_x5_interaction_mean
+  )
+
+# --- linear regression model on original variables: 'x3', 'x5' ---
+fit <- lm(y ~ x3 * x5, data = data)
+coef(fit)
+
+# --- linear regression model on original variables: 'x3', 'x5', 'x3_x5_interaction' ---
+# to confirm it's the same as above
+fit <- lm(y ~ x3 + x5 + x3_x5_interaction, data = data)
+coef(fit)
+
+# --- Scenario 1: linear regression model on centered variables 'x3_C', 'x5_C' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C * x5_C, data = data)
+coef(fit)
+
+# --- Scenario 2: linear regression model on centered variables 'x3_C', 'x5_C', 'x3_x5_interaction_C' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C + x5_C + x3_x5_interaction_C, data = data)
+coef(fit)
+
+# --- Scenario 3: linear regression model on centered variables 'x3_C', 'x5_C', 'x3_x5_interaction_C2' ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C + x5_C + x3_x5_interaction_C2, data = data)
+coef(fit)
+```
+
+```{r}
+
+```
