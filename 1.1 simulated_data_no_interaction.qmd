@@ -359,7 +359,7 @@ coef(fit)
 
 ## Centered algorithm with a *continuous* predictor using *restricted cubic spline (rcs)*
 
-__Note:__ this is a newer version where treat rcs as (k-1) independent variables. For the original idea that to find the root as the offest instead of `x_mean`, please see the .qmd file with the same file name in the `backup` folder.
+**Note:** this is a newer version where treat rcs as (k-1) independent variables. For the original idea that to find the root as the offest instead of `x_mean`, please see the .qmd file with the same file name in the `backup` folder.
 
 The centered algorithm with a *rcs* is similar to
 
@@ -713,6 +713,7 @@ Using the original or centered model, using the same predictors should result in
 
 ```{r}
 # a test subset, only selecting the original predictors
+set.seed(100)
 test <- sample_n(data %>% select(x1:y), 100)
 
 # predicted values using the original model
@@ -740,7 +741,6 @@ test$pred.c <- predict(fit.c, newdata = test)
 test$pred.o == test$pred.c
 test$pred.o-test$pred.c
 ```
-
 
 ```{r}
 

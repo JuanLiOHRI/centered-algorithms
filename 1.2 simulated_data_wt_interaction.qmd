@@ -42,8 +42,6 @@ For this tutorial, we will use a simulated dataset with the following predictors
 
 -   `x5`: a continuous variable with normal distribution, used as it is
 
--   `x6`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x6 = 3`
-
 And we assume the outcome `y` is a linear combination of the predictors with some noise, and different kinds of interactions:
 
 -   Interaction of two categorical variables: `x1`, `x2`
@@ -56,7 +54,7 @@ And we assume the outcome `y` is a linear combination of the predictors with som
 
 -   Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
 
--   TODO: Interaction of two continuous variables (with rcs): `x4`, `x6`
+-   DISCUSS if necessaey: Interaction of two continuous variables (with rcs): `x4`, `x6`
 
 ```{r}
 n <- 1000
@@ -101,16 +99,7 @@ rcs.fit_x4 <- labelled::remove_attributes(
   names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
 )
 colnames(rcs.fit_x4) <- paste0("x4_rcs_", 1:(k_x4 - 1))
-
-k_x6 <- 3
-rcs.fit <- rcs(data$x6, k_x6)
-rcs.fit_x6 <- labelled::remove_attributes(
-  rcs.fit,
-  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
-)
-colnames(rcs.fit_x6) <- paste0("x6_rcs_", 1:(k_x6 - 1))
-
-data <- bind_cols(data, rcs.fit_x4, rcs.fit_x6)
+data <- bind_cols(data, rcs.fit_x4)
 
 # outcome
 data <- data %>%
@@ -126,8 +115,6 @@ data <- data %>%
       18 * x4_rcs_2 +
       21 * x4_rcs_3 -
       6 * x5 +
-      0.6 * x6_rcs_1 +
-      1.5 * x6_rcs_2 +
       0.1 * x3_x5_interaction +
       error,
     x2 == "x2_cat2" ~ 100 +
@@ -139,8 +126,6 @@ data <- data %>%
       36 * x4_rcs_2 +  # change based on value of x2
       14 * x4_rcs_3 -  # change based on value of x2
       6 * x5 +
-      0.6 * x6_rcs_1 +
-      1.5 * x6_rcs_2 +
       0.1 * x3_x5_interaction +
       error,
     x2 == "x2_cat3" ~ 100 +
@@ -152,8 +137,6 @@ data <- data %>%
       40 * x4_rcs_2 +  # change based on value of x2
       16 * x4_rcs_3 -  # change based on value of x2
       6 * x5 +
-      0.6 * x6_rcs_1 +
-      1.5 * x6_rcs_2 +
       0.1 * x3_x5_interaction +
       error
   ))
@@ -163,28 +146,31 @@ head(data)
 
 # Interaction of two categorical variables: `x1`, `x2`
 
-- With directly centering (see __Scenario 1__ below), the intercept is very close to $\overline{y}$, but not identical.
+-   With direct centering (see **Scenario 1** below), the intercept is very close to $\overline{y}$, but not identical.
 
-- From below code, it can be seen that we should do _conditional centering_ on one of the categorical variables, while do the other one with _directly centering_ (no matter the order, see __Scenario 3__ and __Scenario 4__), but __should NOT do _conditional centering_ on both variables__ (see __Scenario 2__).
+-   From below code, it can be seen that we should do *conditional centering* on one of the categorical variables, while do the other one with *direct centering* (no matter the order, see **Scenario 3** and **Scenario 4**), but **should NOT do *conditional centering* on both variables** (see **Scenario 2**).
 
-- With the proper centering (considering the interaction term), the intercept is equal to $\overline{y}$. But the coefficients of non-interaction terms are affected as well.
+-   With the proper centering (considering the interaction term), the intercept is equal to $\overline{y}$. But the coefficients of non-interaction terms are affected as well.
 
 ```{r}
 #| warning: false
 #| message: false
 
-# -------- directly centering -------- 
+# -------- direct centering -------- 
 # centering x1
 prop.table(table(data$x1))
 (x1_mean <- mean(data$x1_cat2))
 data <- data %>%
-  mutate(x1_C = x1_cat2 - x1_mean)
+  mutate(x1_cat2_C_dir = x1_cat2 - x1_mean)
 
 # centering x2
 (x2_cat2_mean <- mean(data$x2_cat2))
 (x2_cat3_mean <- mean(data$x2_cat3))
 data <- data %>%
-  mutate(x2_cat2_C = x2_cat2 - x2_cat2_mean, x2_cat3_C = x2_cat3 - x2_cat3_mean)
+  mutate(
+    x2_cat2_C_dir = x2_cat2 - x2_cat2_mean, 
+    x2_cat3_C_dir = x2_cat3 - x2_cat3_mean
+  )
 
 # -------- conditional centering -------- 
 # centering x1 considering x2
@@ -193,7 +179,7 @@ data <- data %>%
 (x1_mean_3 <- mean(data$x1_cat2[which(data$x2 == 'x2_cat3')]))
 data <- data %>%
   mutate(
-    x1_C2 = case_when(
+    x1_cat2_C_cnd = case_when(
       x2 == 'x2_cat1' ~ x1_cat2 - x1_mean_1,
       x2 == 'x2_cat2' ~ x1_cat2 - x1_mean_2,
       x2 == 'x2_cat3' ~ x1_cat2 - x1_mean_3
@@ -207,63 +193,64 @@ data <- data %>%
 (x2_cat3_mean_2 <- mean(data$x2_cat3[which(data$x1 == 'x1_cat2')]))
 data <- data %>%
   mutate(
-    x2_cat2_C2 = case_when(
+    x2_cat2_C_cnd = case_when(
       x1 == 'x1_cat1' ~ x2_cat2 - x2_cat2_mean_1,
       x1 == 'x1_cat2' ~ x2_cat2 - x2_cat2_mean_2
     ),
-    x2_cat3_C2 = case_when(
+    x2_cat3_C_cnd = case_when(
       x1 == 'x1_cat1' ~ x2_cat3 - x2_cat3_mean_1,
       x1 == 'x1_cat2' ~ x2_cat3 - x2_cat3_mean_2
     )
   )
 
-# --- linear regression model on original variables: `x1`, 'x2' ---
+# --- linear regression model on original variables: 'x1', 'x2' ---
 fit <- lm(y ~ x1 * x2, data = data)
 coef(fit)
 
-# --- linear regression model on dummy variables: `x1_cat2`, `x2_cat2`, `x2_cat3` ---
+# --- linear regression model on original variables: 'x1', 'x2', but with dummy vars ---
 # to confirm it's the same as above
 fit <- lm(y ~ x1_cat2 * x2_cat2 + x1_cat2 * x2_cat3, data = data)
 coef(fit)
 
-# --- Scenario 1: linear regression model on centered variables: 'x1_C', 'x2_cat2_C', 'x2_cat3_C' ---"
+# --- Scenario 1: linear regression model on direct centered variables ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C * x2_cat2_C + x1_C * x2_cat3_C, data = data)
+fit <- lm(y ~ x1_cat2_C_dir * x2_cat2_C_dir + x1_cat2_C_dir * x2_cat3_C_dir, data = data)
 coef(fit)
 
-# --- Scenario 2: linear regression model on centered variables: 'x1_C2', 'x2_cat2_C2', 'x2_cat3_C2' ---"
+# --- Scenario 2: linear regression model on centered variables, considering each other ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C2 * x2_cat2_C2 + x1_C2 * x2_cat3_C2, data = data)
+fit <- lm(y ~ x1_cat2_C_cnd * x2_cat2_C_cnd + x1_cat2_C_cnd * x2_cat3_C_cnd, data = data)
 coef(fit)
 
-# --- Scenario 3: linear regression model on centered variables: 'x1_C2', 'x2_cat2_C', 'x2_cat3_C' ---"
+# --- Scenario 3: linear regression model on centered variables: x1 with direct centering, x2 with conditional centering ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C2 * x2_cat2_C + x1_C2 * x2_cat3_C, data = data)
+fit <- lm(y ~ x1_cat2_C_dir * x2_cat2_C_cnd + x1_cat2_C_dir * x2_cat3_C_cnd, data = data)
 coef(fit)
 
-# --- Scenario 4: linear regression model on centered variables: 'x1_C', 'x2_cat2_C2', 'x2_cat3_C2' ---"
+# --- Scenario 4: linear regression model on centered variables: x1 with conditional centering, x2 with direct centering ---"
+# to confirm it's the same as above
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C * x2_cat2_C2 + x1_C * x2_cat3_C2, data = data)
+fit <- lm(y ~ x1_cat2_C_cnd * x2_cat2_C_dir + x1_cat2_C_cnd * x2_cat3_C_dir, data = data)
 coef(fit)
 ```
 
-# Interaction of one categorical variable and one continuous variabl (no rcs): `x1`, `x3`
+# Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
 
-- With directly centering (see __Scenario 1__ below), the intercept is very close to $\overline{y}$, but not identical.
+-   With direct centering (see **Scenario 1** below), the intercept is very close to $\overline{y}$, but not identical.
 
-- From below code, it can be seen that we should do _conditional centering_ on the continuous variable, while do _directly centering_ on the categorical variable (see __Scenario 2__).
+-   From below code, it can be seen that we should do *conditional centering* on the continuous variable, while do *direct centering* on the categorical variable (see **Scenario 2**).
 
-- With the proper centering (considering the interaction term), the intercept is equal to $\overline{y}$. But the coefficients of non-interaction terms are affected as well.
+-   With the proper centering (considering the interaction term), the intercept is equal to $\overline{y}$. But the coefficients of non-interaction terms are affected as well.
 
 ```{r}
 #| warning: false
 #| message: false
 
-# -------- directly centering -------- 
+# -------- direct centering -------- 
 # centering x3 
 (x3_mean <- mean(data$x3))
 data <- data %>%
-  mutate(x3_C = x3 - x3_mean)
+  mutate(x3_C_dir = x3 - x3_mean)
 
 # -------- conditional centering -------- 
 # centering x3 considering x2
@@ -272,7 +259,7 @@ data <- data %>%
 (x3_mean_3 <- mean(data$x3[which(data$x2 == 'x2_cat3')]))
 data <- data %>%
   mutate(
-    x3_C2 = case_when(
+    x3_C_cnd = case_when(
       x2 == 'x2_cat1' ~ x3 - x3_mean_1,
       x2 == 'x2_cat2' ~ x3 - x3_mean_2,
       x2 == 'x2_cat3' ~ x3 - x3_mean_3
@@ -283,46 +270,46 @@ data <- data %>%
 fit <- lm(y ~ x2 * x3, data = data)
 coef(fit)
 
-# --- linear regression model on dummy variables: 'x2_cat2', 'x2_cat3', 'x3' ---
+# --- linear regression model on original variables: 'x2', 'x3', but with dummy vars ---
 # to confirm it's the same as above
 fit <- lm(y ~ x2_cat2 * x3 + x2_cat3 * x3, data = data)
 coef(fit)
 
-# --- Scenario 1: linear regression model on centered variables 'x2_cat2_C', 'x2_cat3_C', 'x3_C' ---"
+# --- Scenario 1: linear regression model on direct centered variables ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x2_cat2_C * x3_C + x2_cat3_C * x3_C, data = data)
+fit <- lm(y ~ x2_cat2_C_dir * x3_C_dir + x2_cat3_C_dir * x3_C_dir, data = data)
 coef(fit)
 
-# --- Scenario 2: linear regression model on centered variables 'x2_cat2_C', 'x2_cat3_C', 'x3_C2' ---"
+# --- Scenario 2: linear regression model on centered variables:  x2 with direct centering, x3 with conditional centering ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x2_cat2_C * x3_C2 + x2_cat3_C * x3_C2, data = data)
+fit <- lm(y ~ x2_cat2_C_dir * x3_C_cnd + x2_cat3_C_dir * x3_C_cnd, data = data)
 coef(fit)
 ```
 
 # Interaction of two continuous variabl (no rcs): `x3`, `x5`
 
-- There are two methods to center the interaction term:
+-   There are two methods to center the interaction term:
 
-  -   product of the two centered variables: `x3_C * x5_C` (see __Scenario 1__, __Scenario 2__)
+    -   product of the two centered variables: `x3_C * x5_C` (see **Scenario 1**, **Scenario 2**)
 
-  -   center the original interaction term: `x3_x5_interaction - x3_x5_interaction_mean` (see __Scenario 3__)
+    -   center the original interaction term: `x3_x5_interaction - x3_x5_interaction_mean` (see **Scenario 3**)
 
-- Below code confirms that the second method is correct one
+-   Below code confirms that the second method is the correct one
 
 ```{r}
 #| warning: false
 #| message: false
 
-# centering x5
+# direct centering x5
 (x5_mean <- mean(data$x5))
 data <- data %>%
-  mutate(x5_C = x5 - x5_mean)
+  mutate(x5_C_dir = x5 - x5_mean)
 
 # centering x3*x5: two methods
 (x3_x5_interaction_mean <- mean(data$x3_x5_interaction))
 data <- data %>%
   mutate(
-    x3_x5_interaction_C = x3_C * x5_C,
+    x3_x5_interaction_C = x3_C_dir * x5_C_dir,
     x3_x5_interaction_C2 = x3_x5_interaction - x3_x5_interaction_mean
   )
 
@@ -335,30 +322,274 @@ coef(fit)
 fit <- lm(y ~ x3 + x5 + x3_x5_interaction, data = data)
 coef(fit)
 
-# --- Scenario 1: linear regression model on centered variables 'x3_C', 'x5_C' ---"
+# --- Scenario 1: linear regression model on direct centered variables 'x3_C_dir', 'x5_C_dir' ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x3_C * x5_C, data = data)
+fit <- lm(y ~ x3_C_dir * x5_C_dir, data = data)
 coef(fit)
 
-# --- Scenario 2: linear regression model on centered variables 'x3_C', 'x5_C', 'x3_x5_interaction_C' ---"
+# --- Scenario 2: linear regression model on centered variables 'x3_C_dir', 'x5_C_dir', 'x3_x5_interaction_C' ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x3_C + x5_C + x3_x5_interaction_C, data = data)
+fit <- lm(y ~ x3_C_dir + x5_C_dir + x3_x5_interaction_C, data = data)
 coef(fit)
 
 # --- Scenario 3: linear regression model on centered variables 'x3_C', 'x5_C', 'x3_x5_interaction_C2' ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x3_C + x5_C + x3_x5_interaction_C2, data = data)
+fit <- lm(y ~ x3_C_dir + x5_C_dir + x3_x5_interaction_C2, data = data)
 coef(fit)
 ```
 
 # Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
-```{r}
-rcs.fit <- rcs(data$x4, k_x4)
 
+```{r}
+# direct centering x4
+(x4_mean <- mean(data$x4))
+data <- data %>%
+  mutate(x4_C_dir = x4 - x4_mean)
+
+# centering the rcs terms of x4, considering x2
+(x_mean_1_cat1 <- mean(data$x4_rcs_1[which(data$x2 == 'x2_cat1')]))
+(x_mean_1_cat2 <- mean(data$x4_rcs_1[which(data$x2 == 'x2_cat2')]))
+(x_mean_1_cat3 <- mean(data$x4_rcs_1[which(data$x2 == 'x2_cat3')]))
+
+(x_mean_2_cat1 <- mean(data$x4_rcs_2[which(data$x2 == 'x2_cat1')]))
+(x_mean_2_cat2 <- mean(data$x4_rcs_2[which(data$x2 == 'x2_cat2')]))
+(x_mean_2_cat3 <- mean(data$x4_rcs_2[which(data$x2 == 'x2_cat3')]))
+
+(x_mean_3_cat1 <- mean(data$x4_rcs_3[which(data$x2 == 'x2_cat1')]))
+(x_mean_3_cat2 <- mean(data$x4_rcs_3[which(data$x2 == 'x2_cat2')]))
+(x_mean_3_cat3 <- mean(data$x4_rcs_3[which(data$x2 == 'x2_cat3')]))
+
+data <- data %>%
+  mutate(
+    x4_rcs_1_C_cnd = case_when(
+      x2 == 'x2_cat1' ~ x4_rcs_1 - x_mean_1_cat1,
+      x2 == 'x2_cat2' ~ x4_rcs_1 - x_mean_1_cat2,
+      x2 == 'x2_cat3' ~ x4_rcs_1 - x_mean_1_cat3),
+    x4_rcs_2_C_cnd = case_when(
+      x2 == 'x2_cat1' ~ x4_rcs_2 - x_mean_2_cat1,
+      x2 == 'x2_cat2' ~ x4_rcs_2 - x_mean_2_cat2,
+      x2 == 'x2_cat3' ~ x4_rcs_2 - x_mean_2_cat3),
+    x4_rcs_3_C_cnd = case_when(
+      x2 == 'x2_cat1' ~ x4_rcs_3 - x_mean_3_cat1,
+      x2 == 'x2_cat2' ~ x4_rcs_3 - x_mean_3_cat2,
+      x2 == 'x2_cat3' ~ x4_rcs_3 - x_mean_3_cat3)
+  )
+  
+# --- linear regression model on original variables: 'x2', 'rcs(x4, k_x4)' ---
 fit <- lm(y ~ x2 * rcs(x4, k_x4), data = data)
+coef(fit)
+
+# --- linear regression model on original variables 'x2', 'rcs(x4, k_x4)', but with dummy vars  ---
+# to confirm it's the same as above
+fit <- lm(y ~ x2_cat2 * rcs(x4, k_x4) + x2_cat3 * rcs(x4, k_x4), data = data)
+coef(fit)
+
+# --- linear regression model on original variables 'x2', 'rcs(x4, k_x4)', but with dummy vars and rcs terms ---
+# to confirm it's the same as above
+fit <- lm(y ~ x2_cat2 * x4_rcs_1 + x2_cat3 * x4_rcs_1 + x2_cat2 * x4_rcs_2 + x2_cat3 * x4_rcs_2 + x2_cat2 * x4_rcs_3 +
+          x2_cat3 * x4_rcs_3, data = data)
+coef(fit)
+
+# --- linear regression model on direct centered variables ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C_dir * rcs(x4_C_dir, k_x4) + x2_cat3_C_dir * rcs(x4_C_dir, k_x4), data = data)
+coef(fit)
+
+# --- linear regression model on centered variables:  x2 with direct centering, x4 terms with conditional centering ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C_dir * x4_rcs_1_C_cnd + x2_cat3_C_dir * x4_rcs_1_C_cnd + 
+              x2_cat2_C_dir * x4_rcs_2_C_cnd + x2_cat3_C_dir * x4_rcs_2_C_cnd + 
+              x2_cat2_C_dir * x4_rcs_3_C_cnd + x2_cat3_C_dir * x4_rcs_3_C_cnd, data = data)
+coef(fit)
 ```
 
+# Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
 
+```{r}
+# add the interaction columns
+data <- data %>% 
+  mutate(
+    x3_x4_rcs_1_interaction = x3 * x4_rcs_1,
+    x3_x4_rcs_2_interaction = x3 * x4_rcs_2,
+    x3_x4_rcs_3_interaction = x3 * x4_rcs_3
+  )
+
+# centering the rcs terms of x4
+(x4_rcs_1_mean <- mean(data$x4_rcs_1))
+(x4_rcs_2_mean <- mean(data$x4_rcs_2))
+(x4_rcs_3_mean <- mean(data$x4_rcs_3))
+data <- data %>%
+  mutate(
+    x4_rcs_1_C_dir = x4_rcs_1 - x4_rcs_1_mean,
+    x4_rcs_2_C_dir = x4_rcs_2 - x4_rcs_2_mean,
+    x4_rcs_3_C_dir = x4_rcs_3 - x4_rcs_3_mean
+  )
+
+# centering the interaction terms
+(x3_x4_rcs_1_interaction_mean <- mean(data$x3_x4_rcs_1_interaction))
+(x3_x4_rcs_2_interaction_mean <- mean(data$x3_x4_rcs_2_interaction))
+(x3_x4_rcs_3_interaction_mean <- mean(data$x3_x4_rcs_3_interaction))
+data <- data %>%
+  mutate(
+    x3_x4_rcs_1_interaction_C = x3_x4_rcs_1_interaction - x3_x4_rcs_1_interaction_mean,
+    x3_x4_rcs_2_interaction_C = x3_x4_rcs_2_interaction - x3_x4_rcs_2_interaction_mean,
+    x3_x4_rcs_3_interaction_C = x3_x4_rcs_3_interaction - x3_x4_rcs_3_interaction_mean
+  )
+
+# --- linear regression model on original variables: 'x3', 'rcs(x4, k_x4)' ---
+fit <- lm(y ~ x3 * rcs(x4, k_x4), data = data)
+coef(fit)
+
+# --- linear regression model on original variables: 'x3', 'rcs(x4, k_x4)', but with rcs and interaction terms ---
+# to confirm it's the same as above
+fit <- lm(y ~ x3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x3_x4_rcs_1_interaction + x3_x4_rcs_2_interaction + x3_x4_rcs_3_interaction, data = data)
+coef(fit)
+
+# --- linear regression model on centered variables ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C_dir + x4_rcs_1_C_dir + x4_rcs_2_C_dir + x4_rcs_3_C_dir + x3_x4_rcs_1_interaction_C + x3_x4_rcs_2_interaction_C + x3_x4_rcs_3_interaction_C, data = data)
+coef(fit)
+```
+
+# Put everything together
+
+-   Interaction of two categorical variables: `x1`, `x2`
+
+-   Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
+
+-   Interaction of two continuous variables (no rcs): `x3`, `x5`
+
+-   Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
+
+-   Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
+
+```{r}
+options(scipen = 999)
+# original model
+fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4, k_x4) + x5 +
+              x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4, k_x4) + x3*rcs(x4, k_x4), data = data)
+coef(fit.o)
+(pred <- predict(fit.o, newdata = data[1:5,]))
+
+# original model
+# confirm it's the same as above
+fit.o <- lm(y ~ x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4, k_x4) + x3*rcs(x4, k_x4), data = data)
+coef(fit.o)
+(pred <- predict(fit.o, newdata = data[1:5,]))
+
+# centered model
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit.c <- lm(y ~ 
+                # centered x1*x2
+                x2_cat2_C_dir * x1_cat2_C_cnd + x2_cat3_C_dir * x1_cat2_C_cnd + 
+                # centered x2*x3
+                x2_cat2_C_dir * x3_C_cnd + x2_cat3_C_dir * x3_C_cnd +
+                # centered x3*x5
+                x3_C_cnd + x5_C_dir + x3_x5_interaction_C2 +
+                # centered x2*rcs(x4, k_x4)
+                x2_cat2_C_dir * x4_rcs_1_C_cnd + x2_cat3_C_dir * x4_rcs_1_C_cnd + 
+                x2_cat2_C_dir * x4_rcs_2_C_cnd + x2_cat3_C_dir * x4_rcs_2_C_cnd + 
+                x2_cat2_C_dir * x4_rcs_3_C_cnd + x2_cat3_C_dir * x4_rcs_3_C_cnd +
+                # centered x3*rcs(x4, k_x4)
+                x3_C_cnd + x4_rcs_1_C_cnd + x4_rcs_2_C_cnd + x4_rcs_3_C_cnd + 
+                x3_x4_rcs_1_interaction_C + x3_x4_rcs_2_interaction_C + x3_x4_rcs_3_interaction_C, data = data)
+coef(fit.c)
+(pred <- predict(fit.c, newdata = data[1:5,]))
+
+```
+
+## test
+
+Using the original or centered model, using the same predictors should result in the same predicted values.
+
+```{r}
+# a test2 subset, only selecting the original predictors
+set.seed(100)
+test2 <- sample_n(data, 100)
+
+# predicted values using the original model
+test2$pred.o <- predict(fit.o, newdata = test2)
+
+# predicted values using the centered model
+test2$pred.c <- predict(fit.c, newdata = test2)
+
+# compare the predicted values
+test2$pred.o == test2$pred.c
+test2$pred.o - test2$pred.c
+```
+
+```{r}
+# a test subset, only selecting the original predictors
+set.seed(100)
+test <- sample_n(data %>% select(x1:y), 100)
+
+# predicted values using the original model
+test$pred.o <- predict(fit.o, newdata = test)
+
+# get the centered values of the test subset
+test <- test %>%
+  mutate(
+    x1_cat2_C_cnd = case_when(
+      x2 == 'x2_cat1' ~
+        x1_cat2 - mean(data$x1_cat2[which(data$x2 == 'x2_cat1')]),
+      x2 == 'x2_cat2' ~
+        x1_cat2 - mean(data$x1_cat2[which(data$x2 == 'x2_cat2')]),
+      x2 == 'x2_cat3' ~
+        x1_cat2 - mean(data$x1_cat2[which(data$x2 == 'x2_cat3')])
+    ),
+    x2_cat2_C_dir = x2_cat2 - mean(data$x2_cat2),
+    x2_cat3_C_dir = x2_cat3 - mean(data$x2_cat3),
+    x3_C_cnd = case_when(
+      x2 == 'x2_cat1' ~ x3 - mean(data$x3[which(data$x2 == 'x2_cat1')]),
+      x2 == 'x2_cat2' ~ x3 - mean(data$x3[which(data$x2 == 'x2_cat2')]),
+      x2 == 'x2_cat3' ~ x3 - mean(data$x3[which(data$x2 == 'x2_cat3')])
+    ),
+    x5_C_dir = x5 - mean(data$x5),
+    x3_x5_interaction_C2 = x3_x5_interaction - mean(data$x3_x5_interaction),
+    x4_rcs_1_C_cnd = case_when(
+      x2 == 'x2_cat1' ~
+        x4_rcs_1 - mean(data$x4_rcs_1[which(data$x2 == 'x2_cat1')]),
+      x2 == 'x2_cat2' ~
+        x4_rcs_1 - mean(data$x4_rcs_1[which(data$x2 == 'x2_cat2')]),
+      x2 == 'x2_cat3' ~
+        x4_rcs_1 - mean(data$x4_rcs_1[which(data$x2 == 'x2_cat3')])
+    ),
+    x4_rcs_2_C_cnd = case_when(
+      x2 == 'x2_cat1' ~
+        x4_rcs_2 - mean(data$x4_rcs_2[which(data$x2 == 'x2_cat1')]),
+      x2 == 'x2_cat2' ~
+        x4_rcs_2 - mean(data$x4_rcs_2[which(data$x2 == 'x2_cat2')]),
+      x2 == 'x2_cat3' ~
+        x4_rcs_2 - mean(data$x4_rcs_2[which(data$x2 == 'x2_cat3')])
+    ),
+    x4_rcs_3_C_cnd = case_when(
+      x2 == 'x2_cat1' ~
+        x4_rcs_3 - mean(data$x4_rcs_3[which(data$x2 == 'x2_cat1')]),
+      x2 == 'x2_cat2' ~
+        x4_rcs_3 - mean(data$x4_rcs_3[which(data$x2 == 'x2_cat2')]),
+      x2 == 'x2_cat3' ~
+        x4_rcs_3 - mean(data$x4_rcs_3[which(data$x2 == 'x2_cat3')])
+    ),
+    x3_x4_rcs_1_interaction = x3 * x4_rcs_1,
+    x3_x4_rcs_2_interaction = x3 * x4_rcs_2,
+    x3_x4_rcs_3_interaction = x3 * x4_rcs_3
+  ) %>%
+  mutate(
+    x3_x4_rcs_1_interaction_C = x3_x4_rcs_1_interaction -
+      mean(data$x3_x4_rcs_1_interaction),
+    x3_x4_rcs_2_interaction_C = x3_x4_rcs_2_interaction -
+      mean(data$x3_x4_rcs_2_interaction),
+    x3_x4_rcs_3_interaction_C = x3_x4_rcs_3_interaction -
+      mean(data$x3_x4_rcs_3_interaction)
+  )
+
+# predicted values using the centered model
+test$pred.c <- predict(fit.c, newdata = test)
+
+# compare the predicted values
+test$pred.o == test$pred.c
+test$pred.o - test$pred.c
+```
 
 ```{r}
 
