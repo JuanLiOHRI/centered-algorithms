@@ -174,7 +174,7 @@ $$
 prop.table(table(data$x1))
 (x_mean <- mean(data$x1_cat2))
 data <- data %>%
-  mutate(x1_C = x1_cat2 - x_mean)
+  mutate(x1_cat2_C = x1_cat2 - x_mean)
 
 # --- linear regression model on `x1_cat2` ---
 paste0(
@@ -191,7 +191,7 @@ sum(coef(fit)) # beta_0 + beta_1
 
 # --- linear regression model on centered variable `x1_C` ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C, data = data)
+fit <- lm(y ~ x1_cat2_C, data = data)
 coef(fit)
 ```
 
@@ -558,11 +558,60 @@ data <- data %>%
     x4_rcs_3_C = x4_rcs_3 - x_mean_3
   )
 
+# rcs.fit.C <- rcs(data$x4_C, k_x4)
+# res <- labelled::remove_attributes(
+#   rcs.fit.C,
+#   names(attributes(rcs.fit.C))[3:length(names(attributes(rcs.fit.C)))]
+# )
+# head(res)
+
+# head(data %>% select(x4_rcs_1_C, x4_rcs_2_C, x4_rcs_3_C))
+
 # --- linear regression model on centered rcs terms "x4_rcs_1_C", "x4_rcs_2_C", "x4_rcs_3_C" ---
 # confirm if it's the same as above
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
 coef(fit)
+```
+
+```{r}
+# visualization
+fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
+fit.df <- data %>% select(y, x4_rcs_1_C, x4_rcs_2_C, x4_rcs_3_C)
+fit.df$pred <- predict(fit)
+names(fit.df)[which(names(fit.df) == "x4_rcs_1_C")] <- "x4"
+
+# plot
+ggplot(data, aes(x4, y)) +
+  geom_point(color = "blue", alpha = 0.1) +
+  geom_hline(yintercept = mean(data$y), color = "black", linetype = "dashed") +
+  annotate(
+    "label",
+    x = max(data$x4),
+    y = mean(data$y),
+    label = "mean(data$y)",
+    size = unit(3, "pt")
+  ) +
+  geom_vline(xintercept = mean(data$x4), color = "black", linetype = "dashed") +
+  annotate(
+    "label",
+    x = mean(data$x4),
+    y = max(data$y),
+    label = "mean(data$x4)",
+    size = unit(3, "pt")
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_smooth(method = "lm", formula = y ~ rcs(x, k_x4)) +
+  geom_point(aes(x4_C, y), color = "red", alpha = 0.1) +
+  geom_smooth(
+    aes(x4_C, y),
+    method = "lm",
+    formula = y ~ rcs(x, k_x4),
+    color = "red"
+  ) +
+  #geom_point(aes_auto(fit.df), data=fit.df, color = "forestgreen") +
+  geom_path(data=fit.df %>% arrange(x4), aes(x = x4, y = pred), color = "forestgreen") +
+  theme_bw()
 ```
 
 # Two predictors
@@ -578,7 +627,7 @@ coef(fit)
 
 # --- linear regression model on centered variable ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C + x2_cat2_C + x2_cat3_C, data = data)
+fit <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C, data = data)
 coef(fit)
 ```
 
@@ -689,14 +738,49 @@ coef(fit)
 
 ```{r}
 # original model
-fit <- lm(y ~ x1 + x2 + x3 + rcs(x4, k_x4) + x5 + rcs(x6, k_x6), data = data)
-coef(fit)
+fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4, k_x4) + x5 + rcs(x6, k_x6), data = data)
+coef(fit.o)
 
 # centered model
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x1_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C, data = data)
-coef(fit)
+fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C, data = data)
+coef(fit.c)
 ```
+
+## test
+
+Using the original or centered model, using the same predictors should result in the same predicted values.
+
+```{r}
+# a test subset, only selecting the original predictors
+test <- sample_n(data %>% select(x1:y), 100)
+
+# predicted values using the original model
+test$pred.o <- predict(fit.o, newdata = test)
+
+# get the centered values of the test subset
+test <- test %>%
+  mutate(
+    x1_cat2_C = x1_cat2 - mean(data$x1_cat2),
+    x2_cat2_C = x2_cat2 - mean(data$x2_cat2),
+    x2_cat3_C = x2_cat3 - mean(data$x2_cat3),
+    x3_C = x3 - mean(data$x3),
+    x4_rcs_1_C = x4_rcs_1 - mean(data$x4_rcs_1),
+    x4_rcs_2_C = x4_rcs_2 - mean(data$x4_rcs_2),
+    x4_rcs_3_C = x4_rcs_3 - mean(data$x4_rcs_3),
+    x5_C = x5 - mean(data$x5),
+    x6_rcs_1_C = x6_rcs_1 - mean(data$x6_rcs_1),
+    x6_rcs_2_C = x6_rcs_2 - mean(data$x6_rcs_2)
+  )
+
+# predicted values using the centered model
+test$pred.c <- predict(fit.c, newdata = test)
+
+# compare the predicted values
+test$pred.o == test$pred.c
+test$pred.o-test$pred.c
+```
+
 
 ```{r}
 
