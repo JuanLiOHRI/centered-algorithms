@@ -50,11 +50,11 @@ And we assume the outcome `y` is a linear combination of the predictors with som
 
 -   Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
 
--   Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
-
 -   Interaction of two continuous variables (no rcs): `x3`, `x5`
 
--   TODO: Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
+-   Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
+
+-   Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
 
 -   TODO: Interaction of two continuous variables (with rcs): `x4`, `x6`
 
@@ -350,6 +350,15 @@ paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x3_C + x5_C + x3_x5_interaction_C2, data = data)
 coef(fit)
 ```
+
+# Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
+```{r}
+rcs.fit <- rcs(data$x4, k_x4)
+
+fit <- lm(y ~ x2 * rcs(x4, k_x4), data = data)
+```
+
+
 
 ```{r}
 

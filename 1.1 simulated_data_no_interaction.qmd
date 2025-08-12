@@ -359,6 +359,10 @@ coef(fit)
 
 ## Centered algorithm with a *continuous* predictor using *restricted cubic spline (rcs)*
 
+__Note:__ this is a newer version where treat rcs as (k-1) independent variables. For the original idea that to find the root as the offest instead of `x_mean`, please see the .qmd file with the same file name in the `backup` folder.
+
+The centered algorithm with a *rcs* is similar to
+
 The linear regression with a *rcs* with $k$ knots can be written as $y=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}x_{rcs_j}}$.
 
 ### Components of rcs
@@ -531,75 +535,34 @@ paste0("Mean outcome in the dataset: ", mean(data$y))
 predict(fit.C, newdata = data.frame(x4_C = 0))
 ```
 
-### Centered algorithm using *rcs*: using an offset instead of `x_mean`
-
-From above, it confirms that when doing a horizontal shift, all $\beta$s except for the intercept remain unaffected. Therefore, the current task becomes to find a value $\tilde{x}$ that $\tilde{y}=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}\tilde{x}_{rcs_j}}= \overline{y}$ (*i.e.* the "root" below), and use it as the offset.
+### Instead of finding the root (see file in the "backup" folder), treat rcs as (k-1) variables
 
 ```{r}
-# --- linear regression model on `rcs(x4,k_x4)` ---
+# --- linear regression model on 'rcs(x4,k_x4)'' ---
 fit <- lm(y ~ rcs(x4, k_x4), data = data)
 coef(fit)
-root.x4 <- root.search(fit, data, c("x4"), k_x4, mean(data$y))$x4
 
-# the "centered" x4
-data <- data %>% mutate(x4_C1 = x4 - root.x4)
+# --- linear regression model on "x4_rcs_1", "x4_rcs_2", "x4_rcs_3" ---
+# confirm if it's the same as above
+fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3, data = data)
+coef(fit)
 
-ggplot(data, aes(x4, y)) +
-  geom_point(color = "blue", alpha = 0.1) +
-  geom_hline(yintercept = mean(data$y), color = "black", linetype = "dashed") +
-  annotate(
-    "label",
-    x = max(data$x4),
-    y = mean(data$y),
-    label = "mean(data$y)",
-    size = unit(3, "pt")
-  ) +
-  geom_vline(xintercept = 0, linetype = "dashed") +
-  geom_smooth(method = "lm", formula = y ~ rcs(x, k_x4), se = F) +
-  geom_vline(xintercept = mean(data$x4), color = "red", linetype = "dashed") +
-  annotate(
-    "label",
-    x = mean(data$x4),
-    y = max(data$y),
-    label = "mean(data$x4)",
-    size = unit(3, "pt")
-  ) +
-  geom_point(aes(x4_C, y), color = "red", alpha = 0.1) +
-  geom_smooth(
-    aes(x4_C, y),
-    method = "lm",
-    formula = y ~ rcs(x, k_x4),
-    color = "red",
-    se = F
-  ) +
-  geom_vline(xintercept = root.x4, color = "forestgreen", linetype = "dashed") +
-  annotate(
-    "label",
-    x = root.x4,
-    y = max(data$y) * 0.9,
-    label = "root.x4",
-    size = unit(3, "pt")
-  ) +
-  geom_point(aes(x4_C1, y), color = "forestgreen", alpha = 0.1) +
-  geom_smooth(
-    aes(x4_C1, y),
-    method = "lm",
-    formula = y ~ rcs(x, k_x4),
-    color = "forestgreen",
-    se = F
-  ) +
-  theme_bw()
-```
+# centering the rcs terms instead of x4
+(x_mean_1 <- mean(data$x4_rcs_1))
+(x_mean_2 <- mean(data$x4_rcs_2))
+(x_mean_3 <- mean(data$x4_rcs_3))
+data <- data %>%
+  mutate(
+    x4_rcs_1_C = x4_rcs_1 - x_mean_1,
+    x4_rcs_2_C = x4_rcs_2 - x_mean_2,
+    x4_rcs_3_C = x4_rcs_3 - x_mean_3
+  )
 
-Note here, the intercept is not exactly equal to $\overline{y}$, but the fitted value when `x == root.x4`, *i.e.* `x-root.x4 == 0` is equal to $\overline{y}$.
-
-```{r}
-fit.C2 <- lm(y ~ rcs(x4_C1, k_x4), data = data)
-coef(fit.C2)
-
-# prediction using the centered algorithm when x = 0
+# --- linear regression model on centered rcs terms "x4_rcs_1_C", "x4_rcs_2_C", "x4_rcs_3_C" ---
+# confirm if it's the same as above
 paste0("Mean outcome in the dataset: ", mean(data$y))
-predict(fit.C2, newdata = data.frame(x4_C1 = 0))
+fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
+coef(fit)
 ```
 
 # Two predictors
@@ -655,26 +618,20 @@ coef(fit)
 
 ## Centered algorithm for a *categorical* predictor and a *continuous* predictor with *rcs*
 
-Note:
-
-1.  In order to find the root, one needs to first fit a regression using the **centered** categorical variable, and then use `root.search` to find the root.
-
-2.  In the centered algorithm, after centering both variables, the intercept is not exactly $\overline{y}$, but the predicted value when all variables equal to 0 is equal to $\overline{y}$.
-
 ```{r}
-# --- linear regression model on centered categotical variables and `rcs(x4, k_x4)` ---
-fit <- lm(y ~ x2_cat2_C + x2_cat3_C + rcs(x4, k_x4), data = data)
+# --- linear regression model on original variables 'x2', 'rcs(x4, k_x4)' ---
+fit <- lm(y ~ x2 + rcs(x4, k_x4), data = data)
 coef(fit)
-# finding the root for x4
-(root.x4 <- root.search(fit, data, c("x4"), k_x4, mean(data$y))$x4)
-# the "centered" x4
-data <- data %>% mutate(x4_C2 = x4 - root.x4)
 
-# --- linear regression model on centered categotical variables and centered `rcs(x4_C2, k_x4)` ---
-paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x2_cat2_C + x2_cat3_C + rcs(x4_C2, k_x4), data = data)
+# --- linear regression model on original variables 'x2', 'rcs(x4, k_x4)', but with dummy vars and rcs terms ---
+# to confirm it's the same as above
+fit <- lm(y ~ x2_cat2 + x2_cat3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3, data = data)
 coef(fit)
-predict(fit, newdata = data.frame(x2_cat2_C = 0, x2_cat3_C = 0, x4_C2 = 0))
+
+# --- linear regression model on centered variables ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C + x2_cat3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
+coef(fit)
 ```
 
 ## Centered algorithm for one *continuous* predictor without rcs and one with rcs
@@ -686,82 +643,46 @@ Note:
 2.  In the centered algorithm, after centering both variables, the intercept is not exactly $\overline{y}$, but the predicted value when all variables equal to 0 is equal to $\overline{y}$.
 
 ```{r}
-# --- linear regression model on centered `x3_C` and `rcs(x4, k_x4)` ---
-fit <- lm(y ~ x3_C + rcs(x4, k_x4), data = data)
+# --- linear regression model on original variables 'x3', 'rcs(x4, k_x4)' ---
+fit <- lm(y ~ x3 + rcs(x4, k_x4), data = data)
 coef(fit)
-# finding the root for x4
-(root.x4 <- root.search(fit, data, c("x4"), k_x4, mean(data$y))$x4)
-# the "centered" x4
-data <- data %>% mutate(x4_C3 = x4 - root.x4)
 
-# --- linear regression model on centered variable `x3_C` and `rcs(x4_C3, k_x4)` ---
-paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ x3_C + rcs(x4_C3, k_x4), data = data)
+# --- linear regression model on original variables 'x3', 'rcs(x4, k_x4)', but with rcs terms ---
+# to confirm it's the same as above
+fit <- lm(y ~ x3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3, data = data)
 coef(fit)
-predict(fit, newdata = data.frame(x3_C = 0, x4_C3 = 0))
+
+# --- linear regression model on centered variables ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
+coef(fit)
 ```
 
 ## Centered algorithm for two *continuous* predictors with *rcs*
 
-Using plotly to visualize
-
 ```{r}
-# ref: https://forum.posit.co/t/3d-plotly-scatter-plot-with-2d-plane/43899
-# ref: https://stackoverflow.com/questions/44322350/add-regression-plane-in-r-using-plotly
-
-library(plotly)
-
-fig <- plot_ly(data, x = ~x4, y = ~x6, z = ~y)
-fig <- fig %>% add_markers(size = 1, opacity = 0.7)
-
-# add the horizontal plane at z == mean(data$y)
-df_h <- data.frame(
-  x = rep(range(data$x4), 2),
-  y = rep(range(data$x6), each = 2),
-  z = mean(data$y)
-) # df for the horizontal plane
-fig <- fig %>% add_mesh(x = ~x, y = ~y, z = ~z, data = df_h, opacity = 0.3)
-
-# add the regression plane
-length.out <- 101
+# --- linear regression model on original variables 'rcs(x4, k_x4)', 'rcs(x6, k_x6)' ---
 fit <- lm(y ~ rcs(x4, k_x4) + rcs(x6, k_x6), data = data)
-df_r <- data.frame(
-  x4 = seq(min(data$x4), max(data$x4), length.out = length.out),
-  x6 = seq(min(data$x6), max(data$x6), length.out = length.out)
-)
-df_r$y <- predict(fit, newdata = df_r)
-fig <- fig %>%
-  add_trace(
-    x = ~x4,
-    y = ~x6,
-    z = ~y,
-    data = df_r,
-    size = 2,
-    type = "scatter3d",
-    mode = "markers"
+coef(fit)
+
+# --- linear regression model on original variables 'rcs(x4, k_x4)', 'rcs(x6, k_x6)', but with rcs terms ---
+# to confirm it's the same as above
+fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x6_rcs_1 + x6_rcs_2, data = data)
+coef(fit)
+
+# centering the rcs terms of x6
+(x_mean_1 <- mean(data$x6_rcs_1))
+(x_mean_2 <- mean(data$x6_rcs_2))
+data <- data %>%
+  mutate(
+    x6_rcs_1_C = x6_rcs_1 - x_mean_1,
+    x6_rcs_2_C = x6_rcs_2 - x_mean_2
   )
 
-fig
-```
-
-```{r}
-# --- Step 1: linear regression model on `rcs(x4,k_x4)` and `rcs(x6,k_x6)` ---
-fit <- lm(y ~ rcs(x4, k_x4) + rcs(x6, k_x6), data = data)
-coef(fit)
-
-# --- Step 2: finding the roots ---
-# finding the root for x4
-res <- root.search(fit, data, c("x4", "x6"), c(k_x4, k_x6), mean(data$y))
-
-# --- Step 3: "centering" x4 and x6 ---
-data <- data %>%
-  mutate(x4_C4 = x4 - res$x4, x6_C4 = x6 - res$x6)
-
-# --- Step 3: linear regression model on centered variable `rcs(x4_C4,k_x4)` and `rcs(x6_C4,k_x6)` ---
+# --- linear regression model on centered variables ---
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(y ~ rcs(x4_C4, k_x4) + rcs(x6_C4, k_x6), data = data)
+fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x6_rcs_1_C + x6_rcs_2_C, data = data)
 coef(fit)
-predict(fit, newdata = data.frame(x4_C4 = 0, x6_C4 = 0))
 ```
 
 # Put everything together
@@ -771,48 +692,10 @@ predict(fit, newdata = data.frame(x4_C4 = 0, x6_C4 = 0))
 fit <- lm(y ~ x1 + x2 + x3 + rcs(x4, k_x4) + x5 + rcs(x6, k_x6), data = data)
 coef(fit)
 
-# --- Step 1: model with centered variables without rcs, and original variable with rcs ---
-fit <- lm(
-  y ~ x1_C + x2_cat2_C + x2_cat3_C + x3_C + rcs(x4, k_x4) + x5_C + rcs(x6, k_x6),
-  data = data
-)
-coef(fit)
-
-# --- Step 2: finding the roots ---
-# finding the root for x4
-res <- root.search(fit, data, c("x4", "x6"), c(k_x4, k_x6), mean(data$y))
-res
-
-# --- Step 3: "centering" x4 and x6 ---
-data <- data %>%
-  mutate(x4_C5 = x4 - res$x4, x6_C5 = x6 - res$x6)
-
-# --- Step 3: linear regression model on all centered variable ---
+# centered model
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit <- lm(
-  y ~
-    x1_C +
-      x2_cat2_C +
-      x2_cat3_C +
-      x3_C +
-      rcs(x4_C5, k_x4) +
-      x5_C +
-      rcs(x6_C5, k_x6),
-  data = data
-)
+fit <- lm(y ~ x1_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C, data = data)
 coef(fit)
-predict(
-  fit,
-  newdata = data.frame(
-    x1_C = 0,
-    x2_cat2_C = 0,
-    x2_cat3_C = 0,
-    x3_C = 0,
-    x4_C5 = 0,
-    x5_C = 0,
-    x6_C5 = 0
-  )
-)
 ```
 
 ```{r}
