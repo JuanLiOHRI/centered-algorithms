@@ -574,46 +574,6 @@ fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
 coef(fit)
 ```
 
-```{r}
-# visualization
-fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
-fit.df <- data %>% select(y, x4_rcs_1_C, x4_rcs_2_C, x4_rcs_3_C)
-fit.df$pred <- predict(fit)
-names(fit.df)[which(names(fit.df) == "x4_rcs_1_C")] <- "x4"
-
-# plot
-ggplot(data, aes(x4, y)) +
-  geom_point(color = "blue", alpha = 0.1) +
-  geom_hline(yintercept = mean(data$y), color = "black", linetype = "dashed") +
-  annotate(
-    "label",
-    x = max(data$x4),
-    y = mean(data$y),
-    label = "mean(data$y)",
-    size = unit(3, "pt")
-  ) +
-  geom_vline(xintercept = mean(data$x4), color = "black", linetype = "dashed") +
-  annotate(
-    "label",
-    x = mean(data$x4),
-    y = max(data$y),
-    label = "mean(data$x4)",
-    size = unit(3, "pt")
-  ) +
-  geom_vline(xintercept = 0, linetype = "dashed") +
-  geom_smooth(method = "lm", formula = y ~ rcs(x, k_x4)) +
-  geom_point(aes(x4_C, y), color = "red", alpha = 0.1) +
-  geom_smooth(
-    aes(x4_C, y),
-    method = "lm",
-    formula = y ~ rcs(x, k_x4),
-    color = "red"
-  ) +
-  #geom_point(aes_auto(fit.df), data=fit.df, color = "forestgreen") +
-  geom_path(data=fit.df %>% arrange(x4), aes(x = x4, y = pred), color = "forestgreen") +
-  theme_bw()
-```
-
 # Two predictors
 
 ## Centered algorithm for two *categorical* predictors
