@@ -538,11 +538,11 @@ predict(fit.C, newdata = data.frame(x4_C = 0))
 ### Instead of finding the root (see file in the "backup" folder), treat rcs as (k-1) variables
 
 ```{r}
-# --- linear regression model on 'rcs(x4,k_x4)'' ---
+# --- linear regression model on the original variable 'rcs(x4,k_x4)' ---
 fit <- lm(y ~ rcs(x4, k_x4), data = data)
 coef(fit)
 
-# --- linear regression model on "x4_rcs_1", "x4_rcs_2", "x4_rcs_3" ---
+# --- linear regression model on the original variable 'rcs(x4,k_x4)', but with rcs terms ---
 # confirm if it's the same as above
 fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3, data = data)
 coef(fit)
