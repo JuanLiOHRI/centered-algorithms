@@ -21,8 +21,8 @@ library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
 
-source("R/util.rcs.R")
-# functions in "util.rcs.R"
+source("R/util.R")
+# functions in "util.R"
 # get_rcs: implement the formula of rcs components
 # step_dummy: dummy variables
 # step_rcs: rcs
