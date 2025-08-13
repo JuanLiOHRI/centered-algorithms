@@ -20,6 +20,8 @@ library(ggplot2) # Data visualization
 library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
+
+source("R/util.rcs.R")
 ```
 
 # Simulate data for this tutorial
@@ -714,12 +716,31 @@ Using the original or centered model, using the same predictors should result in
 ```{r}
 # a test subset, only selecting the original predictors
 set.seed(100)
-test <- sample_n(data %>% select(x1:y), 100)
+test <- sample_n(data %>% select(x1:x6, y), 100)
 
-# predicted values using the original model
-test$pred.o <- predict(fit.o, newdata = test)
+# -------- dummy variables --------
+test <- test %>% 
+  mutate(
+    x1_cat2 = ifelse(x1 == "x1_cat2", 1, 0),
+    x2_cat2 = ifelse(x2 == "x2_cat2", 1, 0),
+    x2_cat3 = ifelse(x2 == "x2_cat3", 1, 0)
+  )
 
-# get the centered values of the test subset
+# -------- rcs(x4, k_x4) --------
+rcs.fit <- rcs(data$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+res <- get_rcs(test$x4, knots_x4)
+colnames(res) <- paste0("x4_rcs_", 1:(k_x4 - 1))
+test <- bind_cols(test, res)
+
+# -------- rcs(x6, k_x6) --------
+rcs.fit <- rcs(data$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+res <- get_rcs(test$x6, knots_x6)
+colnames(res) <- paste0("x6_rcs_", 1:(k_x6 - 1))
+test <- bind_cols(test, res)
+
+# -------- centering all variables --------
 test <- test %>%
   mutate(
     x1_cat2_C = x1_cat2 - mean(data$x1_cat2),
@@ -733,6 +754,9 @@ test <- test %>%
     x6_rcs_1_C = x6_rcs_1 - mean(data$x6_rcs_1),
     x6_rcs_2_C = x6_rcs_2 - mean(data$x6_rcs_2)
   )
+
+# predicted values using the original model
+test$pred.o <- predict(fit.o, newdata = test)
 
 # predicted values using the centered model
 test$pred.c <- predict(fit.c, newdata = test)

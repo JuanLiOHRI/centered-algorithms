@@ -20,6 +20,8 @@ library(ggplot2) # Data visualization
 library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
+
+source("R/util.rcs.R")
 ```
 
 # Simulate data for this tutorial
@@ -77,7 +79,6 @@ data <- data.frame(
   x3 = rnorm(n, mean = 100, sd = 38),
   x4 = rnorm(n, mean = 50, sd = 15),
   x5 = rnorm(n, mean = 30, sd = 5),
-  x6 = rnorm(n, mean = 15, sd = 3),
   error = rnorm(n, mean = 0, sd = 3)
 )
 table(data$x1)
@@ -429,10 +430,22 @@ Using the original or centered model, using the same predictors should result in
 ```{r}
 # a test subset, only selecting the original predictors
 set.seed(100)
-test <- sample_n(data %>% select(x1:y), 100)
+test <- sample_n(data %>% select(x1:x5, y), 100)
 
-# predicted values using the original model
-test$pred.o <- predict(fit.o, newdata = test)
+# -------- dummy variables --------
+test <- test %>% 
+  mutate(
+    x1_cat2 = ifelse(x1 == "x1_cat2", 1, 0),
+    x2_cat2 = ifelse(x2 == "x2_cat2", 1, 0),
+    x2_cat3 = ifelse(x2 == "x2_cat3", 1, 0)
+  )
+
+# -------- rcs(x4, k_x4) --------
+rcs.fit <- rcs(data$x4, k_x4)
+knots <- attributes(rcs.fit)$parms # knot locations
+res <- get_rcs(test$x4, knots)
+colnames(res) <- paste0("x4_rcs_", 1:(k_x4 - 1))
+test <- bind_cols(test, res)
 
 # -------- add interaction terms --------
 test <- test %>% 
@@ -458,7 +471,7 @@ test <- test %>%
     x3_by_x4_rcs_3 = x3 * x4_rcs_3
   )
 
-# -------- centering each term --------
+# -------- centering all variables, including the interaction terms --------
 test <- test %>%
   mutate(
     x1_cat2_C = x1_cat2 - mean(data$x1_cat2),
@@ -484,6 +497,9 @@ test <- test %>%
     x3_by_x4_rcs_2_C = x3_by_x4_rcs_2 - mean(data$x3_by_x4_rcs_2),
     x3_by_x4_rcs_3_C = x3_by_x4_rcs_3 - mean(data$x3_by_x4_rcs_3)
   )
+
+# predicted values using the original model
+test$pred.o <- predict(fit.o, newdata = test)
 
 # predicted values using the centered model
 test$pred.c <- predict(fit.c, newdata = test)

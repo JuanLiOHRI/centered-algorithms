@@ -20,6 +20,8 @@ library(ggplot2) # Data visualization
 library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
+
+source("R/util.rcs.R")
 ```
 
 # Simulate data for this tutorial
