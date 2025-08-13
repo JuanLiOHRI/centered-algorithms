@@ -1,0 +1,325 @@
+---
+title: "Derive mean values of interaction terms and rcs"
+author: "Juan Li"
+date: 2025-08-13
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(fastDummies) # make dummy variables
+library(rms)
+
+source("R/util.rcs.R") 
+# functions in "util.rcs.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+```
+
+# Simulate data for this tutorial
+
+Resources:
+
+-   [Creating simulated data sets in R](https://stirlingcodingclub.github.io/simulating_data/index.html)
+
+-   [Generate Simulated Dataset for Linear Model in R](https://towardsdatascience.com/generate-simulated-dataset-for-linear-model-in-r-469a5e2f4c2e/)
+
+For this tutorial, we will use a simulated dataset with the following predictors:
+
+-   `x1`: a categorical/dichotomous variable with 2 categories: `cat1`, `cat2`
+
+-   `x2`: a categorical variable with 3 categories: `cat1`, `cat2`, `cat3`
+
+-   `x3`: a continuous variable with normal distribution, used as it is
+
+-   `x4`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x4 = 4`
+
+-   `x5`: a continuous variable with normal distribution, used as it is
+
+-   `x6`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x6 = 3`
+
+And we assume the outcome `y` is a linear combination of the predictors with some noise, and different kinds of interactions:
+
+-   Interaction of two categorical variables: `x1`, `x2`
+
+-   Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
+
+-   Interaction of two continuous variables (no rcs): `x3`, `x5`
+
+-   Interaction of one categorical variable and one continuous variabl (with rcs): `x2`, `x4`
+
+-   Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
+
+-   Interaction of two continuous variables (with rcs): `x4`, `x6`
+
+```{r}
+n <- 1000
+seed <- 567
+
+set.seed(seed)
+data <- data.frame(
+  x1 = sample(
+    c("cat1", "cat2"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.5, 0.5)
+  ),
+  x2 = sample(
+    c("cat1", "cat2", "cat3"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.1, 0.4, 0.5)
+  ),
+  x3 = rnorm(n, mean = 100, sd = 38),
+  x4 = rnorm(n, mean = 50, sd = 15),
+  x5 = rnorm(n, mean = 30, sd = 5),
+  x6 = rnorm(n, mean = 15, sd = 3),
+  error = rnorm(n, mean = 0, sd = 3)
+)
+table(data$x1)
+table(data$x2)
+
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data <- step_dummy(data, vars_cat)
+
+# -------- rcs --------
+# x4
+k_x4 <- 4
+rcs.fit <- rcs(data$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data <- step_rcs(data, vars_rcs, knots_list)
+
+# outcome
+data <- data %>%
+  mutate(x3_x5_interaction = x3 * x5) %>%
+  mutate(
+    y = case_when(
+      x2 == "cat1" ~ 100 +
+      3 * x1_cat2 +
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      10 * x3 +
+      25 * x4_rcs_1 +
+      18 * x4_rcs_2 +
+      21 * x4_rcs_3 -
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_x5_interaction +
+      error,
+    x2 == "cat2" ~ 100 +
+      5 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      21 * x3 +        # change based on value of x2
+      8 * x4_rcs_1 +  # change based on value of x2
+      36 * x4_rcs_2 +  # change based on value of x2
+      14 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_x5_interaction +
+      error,
+    x2 == "cat3" ~ 100 +
+      7 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      5 * x3 +         # change based on value of x2
+      2.5 * x4_rcs_1 + # change based on value of x2
+      40 * x4_rcs_2 +  # change based on value of x2
+      16 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_x5_interaction +
+      error
+  ))
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+data <- step_interaction(data %>% select(-x3_x5_interaction), interaction_list)
+
+head(data)
+```
+
+```{r}
+# data with proper centered variables
+data_real <- data
+
+# -------- centering --------
+vars_mean <- names(data_real)
+# get mean values from the ORIGINAL dataset
+(means_real <- get_mean(data, vars_mean))
+# centering vars 
+vars_center <- names(means_real)
+data_real <- step_center(data_real, vars_center, means_real)
+```
+
+# derived means of interaction terms (assuming means of rcs terms are known)
+
+We can approximate the mean values of the interaction terms by using means of each variable. They are quite close, but not identical. I'll evaluate the difference below.
+
+```{r}
+# data centered with derived means of interaction terms (assuming means of rcs terms are known)
+data_derived <- data
+
+# known means values
+vars_mean_known <- c("x1_cat2", "x2_cat2", "x2_cat3", "x3", "x4", "x5", "x6",
+                      "x4_rcs_1", "x4_rcs_2", "x4_rcs_3", "x6_rcs_1", "x6_rcs_2")
+(means_known <- get_mean(data, vars_mean_known))
+
+# derive means of interaction terms
+means_interaction <- list()
+# x1 * x2
+means_interaction[["x1_cat2_by_x2_cat2"]] <- unname(means_known["x1_cat2"] * means_known["x2_cat2"])
+means_interaction[["x1_cat2_by_x2_cat3"]] <- unname(means_known["x1_cat2"] * means_known["x2_cat3"])
+# x2 * x3
+means_interaction[["x2_cat2_by_x3"]] <- unname(means_known["x2_cat2"] * means_known["x3"])
+means_interaction[["x2_cat3_by_x3"]] <- unname(means_known["x2_cat3"] * means_known["x3"])
+# x3 * x5
+means_interaction[["x3_by_x5"]] <- unname(means_known["x3"] * means_known["x5"])
+# x2 * rcs(x4, k_x4)
+means_interaction[["x2_cat2_by_x4_rcs_1"]] <- unname(means_known["x2_cat2"] * means_known["x4_rcs_1"])
+means_interaction[["x2_cat3_by_x4_rcs_1"]] <- unname(means_known["x2_cat3"] * means_known["x4_rcs_1"])
+means_interaction[["x2_cat2_by_x4_rcs_2"]] <- unname(means_known["x2_cat2"] * means_known["x4_rcs_2"])
+means_interaction[["x2_cat3_by_x4_rcs_2"]] <- unname(means_known["x2_cat3"] * means_known["x4_rcs_2"])
+means_interaction[["x2_cat2_by_x4_rcs_3"]] <- unname(means_known["x2_cat2"] * means_known["x4_rcs_3"])
+means_interaction[["x2_cat3_by_x4_rcs_3"]] <- unname(means_known["x2_cat3"] * means_known["x4_rcs_3"])
+# x3 * rcs(x4, k_x4)
+means_interaction[["x3_by_x4_rcs_1"]] <- unname(means_known["x3"] * means_known["x4_rcs_1"])
+means_interaction[["x3_by_x4_rcs_2"]] <- unname(means_known["x3"] * means_known["x4_rcs_2"])
+means_interaction[["x3_by_x4_rcs_3"]] <- unname(means_known["x3"] * means_known["x4_rcs_3"])
+# x4 * rcs(x6, k_x6)
+means_interaction[["x4_rcs_1_by_x6_rcs_1"]] <- unname(means_known["x4_rcs_1"] * means_known["x6_rcs_1"])
+means_interaction[["x4_rcs_2_by_x6_rcs_1"]] <- unname(means_known["x4_rcs_2"] * means_known["x6_rcs_1"])
+means_interaction[["x4_rcs_3_by_x6_rcs_1"]] <- unname(means_known["x4_rcs_3"] * means_known["x6_rcs_1"])
+means_interaction[["x4_rcs_1_by_x6_rcs_2"]] <- unname(means_known["x4_rcs_1"] * means_known["x6_rcs_2"])
+means_interaction[["x4_rcs_2_by_x6_rcs_2"]] <- unname(means_known["x4_rcs_2"] * means_known["x6_rcs_2"])
+means_interaction[["x4_rcs_3_by_x6_rcs_2"]] <- unname(means_known["x4_rcs_3"] * means_known["x6_rcs_2"])
+
+# combine mean values
+means_interaction <- unlist(means_interaction)
+means_derived <- c(means_known, means_interaction)
+
+# compare means
+print("-------- derived means --------")
+vars_mean_derived <- names(means_derived[which(!(names(means_derived) %in% vars_mean_known))])
+data.frame(real = means_real[which(names(means_real) %in% vars_mean_derived)][vars_mean_derived], 
+      derived = means_derived[which(names(means_derived) %in% vars_mean_derived)][vars_mean_derived])
+
+# -------- centering --------
+vars_center <- names(means_derived)
+data_derived <- step_center(data_derived, vars_center, means_derived)
+```
+
+```{r}
+options(scipen = 999)
+print("original model")
+fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4,k_x4) + x5 + rcs(x6,k_x6) + 
+              x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4,k_x4) + x3*rcs(x4,k_x4) + rcs(x4,k_x4)*rcs(x6,k_x6), data = data)
+coef(fit.o)
+
+print("centered model, centered with real means")
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C +
+                # interaction terms of x1 * x2
+                x1_cat2_by_x2_cat2_C + x1_cat2_by_x2_cat3_C +
+                # interaction terms of x2 * x3
+                x2_cat2_by_x3_C + x2_cat3_by_x3_C +
+                # interaction terms of x3 * x5
+                x3_by_x5_C +
+                # interaction terms of x2 * rcs(x4, k_x4)
+                x2_cat2_by_x4_rcs_1_C + 
+                x2_cat3_by_x4_rcs_1_C + 
+                x2_cat2_by_x4_rcs_2_C + 
+                x2_cat3_by_x4_rcs_2_C + 
+                x2_cat2_by_x4_rcs_3_C + 
+                x2_cat3_by_x4_rcs_3_C +
+                # interaction terms of x3 * rcs(x4, k_x4)
+                x3_by_x4_rcs_1_C + x3_by_x4_rcs_2_C + x3_by_x4_rcs_3_C +
+                # interaction terms of x4 * rcs(x6, k_x6)
+                x4_rcs_1_by_x6_rcs_1_C +
+                x4_rcs_2_by_x6_rcs_1_C +
+                x4_rcs_3_by_x6_rcs_1_C +
+                x4_rcs_1_by_x6_rcs_2_C +
+                x4_rcs_2_by_x6_rcs_2_C +
+                x4_rcs_3_by_x6_rcs_2_C, data = data_real)
+coef(fit.c)
+
+print("centered model, centered with derived means of interaction terms")
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C +
+                # interaction terms of x1 * x2
+                x1_cat2_by_x2_cat2_C + x1_cat2_by_x2_cat3_C +
+                # interaction terms of x2 * x3
+                x2_cat2_by_x3_C + x2_cat3_by_x3_C +
+                # interaction terms of x3 * x5
+                x3_by_x5_C +
+                # interaction terms of x2 * rcs(x4, k_x4)
+                x2_cat2_by_x4_rcs_1_C + 
+                x2_cat3_by_x4_rcs_1_C + 
+                x2_cat2_by_x4_rcs_2_C + 
+                x2_cat3_by_x4_rcs_2_C + 
+                x2_cat2_by_x4_rcs_3_C + 
+                x2_cat3_by_x4_rcs_3_C +
+                # interaction terms of x3 * rcs(x4, k_x4)
+                x3_by_x4_rcs_1_C + x3_by_x4_rcs_2_C + x3_by_x4_rcs_3_C +
+                # interaction terms of x4 * rcs(x6, k_x6)
+                x4_rcs_1_by_x6_rcs_1_C +
+                x4_rcs_2_by_x6_rcs_1_C +
+                x4_rcs_3_by_x6_rcs_1_C +
+                x4_rcs_1_by_x6_rcs_2_C +
+                x4_rcs_2_by_x6_rcs_2_C +
+                x4_rcs_3_by_x6_rcs_2_C, data = data_derived)
+coef(fit.c)
+```
+
+# derive mean values of rcs
+
+The problem is with **rcs**, only know the mean of `x4` (same as `x4_rcs_1`) is not enough to get the mean values of `x4_rcs_2` and `x4_rcs_3`.
+
+```{r}
+# ------------ rcs ------------
+# knot locations of rcs(x4, k_x4)
+knots_x4
+# mean values of rcs(x4, k_x4)
+means_real[c("x4", "x4_rcs_1", "x4_rcs_2", "x4_rcs_3")]
+# get_rcs at x4 == mean(x4)
+get_rcs(means_real["x4"], knots_x4)
+```
+
+```{r}
+
+```

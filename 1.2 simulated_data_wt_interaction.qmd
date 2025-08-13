@@ -21,7 +21,15 @@ library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
 
-source("R/util.rcs.R")
+source("R/util.rcs.R") 
+# functions in "util.rcs.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
 ```
 
 # Simulate data for this tutorial
@@ -34,15 +42,17 @@ Resources:
 
 For this tutorial, we will use a simulated dataset with the following predictors:
 
--   `x1`: a categorical/dichotomous variable with 2 categories: `x1_cat1`, `x1_cat2`
+-   `x1`: a categorical/dichotomous variable with 2 categories: `cat1`, `cat2`
 
--   `x2`: a categorical variable with 3 categories: `x2_cat1`, `x2_cat2`, `x2_cat3`
+-   `x2`: a categorical variable with 3 categories: `cat1`, `cat2`, `cat3`
 
 -   `x3`: a continuous variable with normal distribution, used as it is
 
 -   `x4`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x4 = 4`
 
 -   `x5`: a continuous variable with normal distribution, used as it is
+
+-   `x6`: a continuous variablewith normal distribution, used with restricted cubic spline (rcs), `k_x6 = 3`
 
 And we assume the outcome `y` is a linear combination of the predictors with some noise, and different kinds of interactions:
 
@@ -56,7 +66,7 @@ And we assume the outcome `y` is a linear combination of the predictors with som
 
 -   Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
 
--   DISCUSS if necessaey: Interaction of two continuous variables (with rcs): `x4`, `x6`
+-   Interaction of two continuous variables (with rcs): `x4`, `x6`
 
 ```{r}
 n <- 1000
@@ -65,13 +75,13 @@ seed <- 567
 set.seed(seed)
 data <- data.frame(
   x1 = sample(
-    c("x1_cat1", "x1_cat2"),
+    c("cat1", "cat2"),
     size = n,
     replace = TRUE,
     prob = c(0.5, 0.5)
   ),
   x2 = sample(
-    c("x2_cat1", "x2_cat2", "x2_cat3"),
+    c("cat1", "cat2", "cat3"),
     size = n,
     replace = TRUE,
     prob = c(0.1, 0.4, 0.5)
@@ -79,35 +89,37 @@ data <- data.frame(
   x3 = rnorm(n, mean = 100, sd = 38),
   x4 = rnorm(n, mean = 50, sd = 15),
   x5 = rnorm(n, mean = 30, sd = 5),
+  x6 = rnorm(n, mean = 15, sd = 3),
   error = rnorm(n, mean = 0, sd = 3)
 )
 table(data$x1)
 table(data$x2)
 
-# dummy variables
-data <- data %>%
-  mutate(
-    x1_cat2 = ifelse(x1 == 'x1_cat2', 1, 0),
-    x2_cat2 = ifelse(x2 == 'x2_cat2', 1, 0),
-    x2_cat3 = ifelse(x2 == 'x2_cat3', 1, 0)
-  )
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data <- step_dummy(data, vars_cat)
 
-# rcs
+# -------- rcs --------
+# x4
 k_x4 <- 4
 rcs.fit <- rcs(data$x4, k_x4)
-rcs.fit_x4 <- labelled::remove_attributes(
-  rcs.fit,
-  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
-)
-colnames(rcs.fit_x4) <- paste0("x4_rcs_", 1:(k_x4 - 1))
-data <- bind_cols(data, rcs.fit_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data <- step_rcs(data, vars_rcs, knots_list)
 
 # outcome
 data <- data %>%
   mutate(x3_x5_interaction = x3 * x5) %>%
   mutate(
     y = case_when(
-      x2 == "x2_cat1" ~ 100 +
+      x2 == "cat1" ~ 100 +
       3 * x1_cat2 +
       2 * x2_cat2 +
       0.5 * x2_cat3 +
@@ -116,9 +128,11 @@ data <- data %>%
       18 * x4_rcs_2 +
       21 * x4_rcs_3 -
       6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
       0.1 * x3_x5_interaction +
       error,
-    x2 == "x2_cat2" ~ 100 +
+    x2 == "cat2" ~ 100 +
       5 * x1_cat2 +    # change based on value of x2
       2 * x2_cat2 +
       0.5 * x2_cat3 +
@@ -127,9 +141,11 @@ data <- data %>%
       36 * x4_rcs_2 +  # change based on value of x2
       14 * x4_rcs_3 -  # change based on value of x2
       6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
       0.1 * x3_x5_interaction +
       error,
-    x2 == "x2_cat3" ~ 100 +
+    x2 == "cat3" ~ 100 +
       7 * x1_cat2 +    # change based on value of x2
       2 * x2_cat2 +
       0.5 * x2_cat3 +
@@ -138,6 +154,8 @@ data <- data %>%
       40 * x4_rcs_2 +  # change based on value of x2
       16 * x4_rcs_3 -  # change based on value of x2
       6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
       0.1 * x3_x5_interaction +
       error
   ))
@@ -363,6 +381,60 @@ fit <- lm(y ~ x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x3_by_x4_rcs_1_C + x
 coef(fit)
 ```
 
+# Interaction of two continuous variables (with rcs): `x4`, `x6`
+
+```{r}
+# -------- add interaction terms --------
+data <- data %>% 
+  mutate(
+    x4_rcs_1_by_x6_rcs_1 = x4_rcs_1 * x6_rcs_1,
+    x4_rcs_2_by_x6_rcs_1 = x4_rcs_2 * x6_rcs_1,
+    x4_rcs_3_by_x6_rcs_1 = x4_rcs_3 * x6_rcs_1,
+    x4_rcs_1_by_x6_rcs_2 = x4_rcs_1 * x6_rcs_2,
+    x4_rcs_2_by_x6_rcs_2 = x4_rcs_2 * x6_rcs_2,
+    x4_rcs_3_by_x6_rcs_2 = x4_rcs_3 * x6_rcs_2
+  )
+
+# -------- centering each term --------
+data <- data %>%
+  mutate(
+    x6_rcs_1_C = x6_rcs_1 - mean(data$x6_rcs_1),
+    x6_rcs_2_C = x6_rcs_2 - mean(data$x6_rcs_2),
+    x4_rcs_1_by_x6_rcs_1_C = x4_rcs_1_by_x6_rcs_1 - mean(data$x4_rcs_1_by_x6_rcs_1),
+    x4_rcs_2_by_x6_rcs_1_C = x4_rcs_2_by_x6_rcs_1 - mean(data$x4_rcs_2_by_x6_rcs_1),
+    x4_rcs_3_by_x6_rcs_1_C = x4_rcs_3_by_x6_rcs_1 - mean(data$x4_rcs_3_by_x6_rcs_1),
+    x4_rcs_1_by_x6_rcs_2_C = x4_rcs_1_by_x6_rcs_2 - mean(data$x4_rcs_1_by_x6_rcs_2),
+    x4_rcs_2_by_x6_rcs_2_C = x4_rcs_2_by_x6_rcs_2 - mean(data$x4_rcs_2_by_x6_rcs_2),
+    x4_rcs_3_by_x6_rcs_2_C = x4_rcs_3_by_x6_rcs_2 - mean(data$x4_rcs_3_by_x6_rcs_2)
+  )
+
+# --- linear regression model on original variables ---
+fit <- lm(y ~ rcs(x4, k_x4) * rcs(x6, k_x6), data = data)
+coef(fit)
+
+# --- linear regression model on original variables, but unpacked ---
+# to confirm it's the same as above
+fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x6_rcs_1 + x6_rcs_2 +
+  x4_rcs_1_by_x6_rcs_1 +
+  x4_rcs_2_by_x6_rcs_1 +
+  x4_rcs_3_by_x6_rcs_1 +
+  x4_rcs_1_by_x6_rcs_2 +
+  x4_rcs_2_by_x6_rcs_2 +
+  x4_rcs_3_by_x6_rcs_2, data = data)
+coef(fit)
+
+# --- linear regression model on centered variables ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x6_rcs_1_C + x6_rcs_2_C +
+  x4_rcs_1_by_x6_rcs_1_C +
+  x4_rcs_2_by_x6_rcs_1_C +
+  x4_rcs_3_by_x6_rcs_1_C +
+  x4_rcs_1_by_x6_rcs_2_C +
+  x4_rcs_2_by_x6_rcs_2_C +
+  x4_rcs_3_by_x6_rcs_2_C, data = data)
+coef(fit)
+```
+
 # Put everything together
 
 -   Interaction of two categorical variables: `x1`, `x2`
@@ -375,16 +447,18 @@ coef(fit)
 
 -   Interaction of two continuous variables (one with rcs, one without): `x3`, `x4`
 
+-   Interaction of two continuous variables (with rcs): `x4`, `x6`
+
 ```{r}
 options(scipen = 999)
 # original model
-fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4, k_x4) + x5 +
-              x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4, k_x4) + x3*rcs(x4, k_x4), data = data)
+fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4,k_x4) + x5 + rcs(x6,k_x6) + 
+              x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4,k_x4) + x3*rcs(x4,k_x4) + rcs(x4,k_x4)*rcs(x6,k_x6), data = data)
 coef(fit.o)
 
 # original model, but unpacked
 # confirm it's the same as above
-fit.o.2 <- lm(y ~ x1_cat2 + x2_cat2 + x2_cat3 + x3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x5 +
+fit.o.2 <- lm(y ~ x1_cat2 + x2_cat2 + x2_cat3 + x3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x5 + x6_rcs_1 + x6_rcs_2 +
                   # interaction terms of x1 * x2
                   x1_cat2_by_x2_cat2 + x1_cat2_by_x2_cat3 +
                   # interaction terms of x2 * x3
@@ -399,12 +473,19 @@ fit.o.2 <- lm(y ~ x1_cat2 + x2_cat2 + x2_cat3 + x3 + x4_rcs_1 + x4_rcs_2 + x4_rc
                   x2_cat2_by_x4_rcs_3 + 
                   x2_cat3_by_x4_rcs_3 +
                   # interaction terms of x3 * rcs(x4, k_x4)
-                  x3_by_x4_rcs_1 + x3_by_x4_rcs_2 + x3_by_x4_rcs_3, data = data)
+                  x3_by_x4_rcs_1 + x3_by_x4_rcs_2 + x3_by_x4_rcs_3 +
+                  # interaction terms of x4 * rcs(x6, k_x6)
+                  x4_rcs_1_by_x6_rcs_1 +
+                  x4_rcs_2_by_x6_rcs_1 +
+                  x4_rcs_3_by_x6_rcs_1 +
+                  x4_rcs_1_by_x6_rcs_2 +
+                  x4_rcs_2_by_x6_rcs_2 +
+                  x4_rcs_3_by_x6_rcs_2, data = data)
 coef(fit.o.2)
 
 # centered model
 paste0("Mean outcome in the dataset: ", mean(data$y))
-fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C +
+fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C +
                 # interaction terms of x1 * x2
                 x1_cat2_by_x2_cat2_C + x1_cat2_by_x2_cat3_C +
                 # interaction terms of x2 * x3
@@ -419,7 +500,14 @@ fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2
                 x2_cat2_by_x4_rcs_3_C + 
                 x2_cat3_by_x4_rcs_3_C +
                 # interaction terms of x3 * rcs(x4, k_x4)
-                x3_by_x4_rcs_1_C + x3_by_x4_rcs_2_C + x3_by_x4_rcs_3_C, data = data)
+                x3_by_x4_rcs_1_C + x3_by_x4_rcs_2_C + x3_by_x4_rcs_3_C +
+                # interaction terms of x4 * rcs(x6, k_x6)
+                x4_rcs_1_by_x6_rcs_1_C +
+                x4_rcs_2_by_x6_rcs_1_C +
+                x4_rcs_3_by_x6_rcs_1_C +
+                x4_rcs_1_by_x6_rcs_2_C +
+                x4_rcs_2_by_x6_rcs_2_C +
+                x4_rcs_3_by_x6_rcs_2_C, data = data)
 coef(fit.c)
 ```
 
@@ -428,155 +516,49 @@ coef(fit.c)
 Using the original or centered model, using the same predictors should result in the same predicted values.
 
 ```{r}
-# define function for data processing - can be further generalized
-
-# -------- dummy variables --------
-step_dummy <- function(df) {
-  df <- df %>%
-    mutate(
-      x1_cat2 = ifelse(x1 == "x1_cat2", 1, 0),
-      x2_cat2 = ifelse(x2 == "x2_cat2", 1, 0),
-      x2_cat3 = ifelse(x2 == "x2_cat3", 1, 0)
-    )
-
-  return(df)
-}
-
-# -------- rcs --------
-rcs.fit <- rcs(data$x4, k_x4)
-knots <- attributes(rcs.fit)$parms # knot locations
-
-step_rcs <- function(df, knots) {
-  k_x4 <- length(knots)
-  res <- get_rcs(df$x4, knots)
-  colnames(res) <- paste0("x4_rcs_", 1:(k_x4 - 1))
-  df <- bind_cols(df, res)
-
-  return(df)
-}
-
-# -------- add interaction terms --------
-step_interaction <- function(df) {
-  df <- df %>%
-    mutate(
-      # interaction terms of x1 * x2
-      x1_cat2_by_x2_cat2 = x1_cat2 * x2_cat2,
-      x1_cat2_by_x2_cat3 = x1_cat2 * x2_cat3,
-      # interaction terms of x2 * x3
-      x2_cat2_by_x3 = x2_cat2 * x3,
-      x2_cat3_by_x3 = x2_cat3 * x3,
-      # interaction terms of x3 * x5
-      x3_by_x5 = x3 * x5,
-      # interaction terms of x2 * rcs(x4, k_x4)
-      x2_cat2_by_x4_rcs_1 = x2_cat2 * x4_rcs_1,
-      x2_cat3_by_x4_rcs_1 = x2_cat3 * x4_rcs_1,
-      x2_cat2_by_x4_rcs_2 = x2_cat2 * x4_rcs_2,
-      x2_cat3_by_x4_rcs_2 = x2_cat3 * x4_rcs_2,
-      x2_cat2_by_x4_rcs_3 = x2_cat2 * x4_rcs_3,
-      x2_cat3_by_x4_rcs_3 = x2_cat3 * x4_rcs_3,
-      # interaction terms of x3 * rcs(x4, k_x4)
-      x3_by_x4_rcs_1 = x3 * x4_rcs_1,
-      x3_by_x4_rcs_2 = x3 * x4_rcs_2,
-      x3_by_x4_rcs_3 = x3 * x4_rcs_3
-    )
-
-  return(df)
-}
-
-# -------- centering all variables, including the interaction terms --------
-means <- c(
-  mean(data$x1_cat2),
-  mean(data$x2_cat2),
-  mean(data$x2_cat3),
-  mean(data$x1_cat2_by_x2_cat2),
-  mean(data$x1_cat2_by_x2_cat3),
-  mean(data$x3),
-  mean(data$x2_cat2_by_x3),
-  mean(data$x2_cat3_by_x3),
-  mean(data$x5),
-  mean(data$x3_by_x5),
-  mean(data$x4_rcs_1),
-  mean(data$x4_rcs_2),
-  mean(data$x4_rcs_3),
-  mean(data$x2_cat2_by_x4_rcs_1),
-  mean(data$x2_cat3_by_x4_rcs_1),
-  mean(data$x2_cat2_by_x4_rcs_2),
-  mean(data$x2_cat3_by_x4_rcs_2),
-  mean(data$x2_cat2_by_x4_rcs_3),
-  mean(data$x2_cat3_by_x4_rcs_3),
-  mean(data$x3_by_x4_rcs_1),
-  mean(data$x3_by_x4_rcs_2),
-  mean(data$x3_by_x4_rcs_3)
-)
-vars <- c(
-  "x1_cat2",
-  "x2_cat2",
-  "x2_cat3",
-  "x1_cat2_by_x2_cat2",
-  "x1_cat2_by_x2_cat3",
-  "x3",
-  "x2_cat2_by_x3",
-  "x2_cat3_by_x3",
-  "x5",
-  "x3_by_x5",
-  "x4_rcs_1",
-  "x4_rcs_2",
-  "x4_rcs_3",
-  "x2_cat2_by_x4_rcs_1",
-  "x2_cat3_by_x4_rcs_1",
-  "x2_cat2_by_x4_rcs_2",
-  "x2_cat3_by_x4_rcs_2",
-  "x2_cat2_by_x4_rcs_3",
-  "x2_cat3_by_x4_rcs_3",
-  "x3_by_x4_rcs_1",
-  "x3_by_x4_rcs_2",
-  "x3_by_x4_rcs_3"
-)
-means <- setNames(means, vars)
-
-step_center <- function(df, means) {
-  df <- df %>%
-    mutate(
-      x1_cat2_C = x1_cat2 - means["x1_cat2"],
-      x2_cat2_C = x2_cat2 - means["x2_cat2"],
-      x2_cat3_C = x2_cat3 - means["x2_cat3"],
-      x1_cat2_by_x2_cat2_C = x1_cat2_by_x2_cat2 - means["x1_cat2_by_x2_cat2"],
-      x1_cat2_by_x2_cat3_C = x1_cat2_by_x2_cat3 - means["x1_cat2_by_x2_cat3"],
-      x3_C = x3 - means["x3"],
-      x2_cat2_by_x3_C = x2_cat2_by_x3 - means["x2_cat2_by_x3"],
-      x2_cat3_by_x3_C = x2_cat3_by_x3 - means["x2_cat3_by_x3"],
-      x5_C = x5 - means["x5"],
-      x3_by_x5_C = x3_by_x5 - means["x3_by_x5"],
-      x4_rcs_1_C = x4_rcs_1 - means["x4_rcs_1"],
-      x4_rcs_2_C = x4_rcs_2 - means["x4_rcs_2"],
-      x4_rcs_3_C = x4_rcs_3 - means["x4_rcs_3"],
-      x2_cat2_by_x4_rcs_1_C = x2_cat2_by_x4_rcs_1 - means["x2_cat2_by_x4_rcs_1"],
-      x2_cat3_by_x4_rcs_1_C = x2_cat3_by_x4_rcs_1 - means["x2_cat3_by_x4_rcs_1"],
-      x2_cat2_by_x4_rcs_2_C = x2_cat2_by_x4_rcs_2 - means["x2_cat2_by_x4_rcs_2"],
-      x2_cat3_by_x4_rcs_2_C = x2_cat3_by_x4_rcs_2 - means["x2_cat3_by_x4_rcs_2"],
-      x2_cat2_by_x4_rcs_3_C = x2_cat2_by_x4_rcs_3 - means["x2_cat2_by_x4_rcs_3"],
-      x2_cat3_by_x4_rcs_3_C = x2_cat3_by_x4_rcs_3 - means["x2_cat3_by_x4_rcs_3"],
-      x3_by_x4_rcs_1_C = x3_by_x4_rcs_1 - means["x3_by_x4_rcs_1"],
-      x3_by_x4_rcs_2_C = x3_by_x4_rcs_2 - means["x3_by_x4_rcs_2"],
-      x3_by_x4_rcs_3_C = x3_by_x4_rcs_3 - means["x3_by_x4_rcs_3"]
-    )
-
-  return(df)
-}
-```
-
-```{r}
 # a test subset, only selecting the original predictors
 set.seed(100)
-test <- sample_n(data %>% select(x1:x5, y), 100)
+test <- sample_n(data %>% select(x1:x6, y), 100)
 
-# process the test data
-test <- test %>% 
-  step_dummy() %>%
-  step_rcs(knots) %>%
-  step_interaction() %>%
-  step_center(means)
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+test <- step_dummy(test, vars_cat)
 
+# -------- rcs --------
+# x4
+k_x4 <- 4
+rcs.fit <- rcs(data$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+test <- step_rcs(test, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+test <- step_interaction(test, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(test)
+# get mean values from the ORIGINAL dataset
+means <- get_mean(data, vars_mean)
+# centering vars in the test dataset
+vars_center <- names(means)
+test <- step_center(test, vars_center, means)
+
+# -------- prediction --------
 # predicted values using the original model
 test$pred.o <- predict(fit.o, newdata = test)
 

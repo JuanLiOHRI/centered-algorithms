@@ -1,3 +1,4 @@
+require("dplyr")
 # implement the formula of rcs components
 get_rcs <- function(x, knots) {
   k <- length(knots)
@@ -27,6 +28,84 @@ get_rcs <- function(x, knots) {
   }
   res <- as.matrix(res)
   return(res)
+}
+
+# --------------------------
+# define function for data processing
+
+# -------- dummy variables --------
+step_dummy <- function(df, vars_cat) {
+  for (var in vars_cat) {
+    if (!is.null(levels(df[, var]))) {
+      cats <- levels(df[, var])
+    } else {
+      cats <- sort(unique(df[, var]))
+    }
+    for (cat in cats[-1]) {
+      df$new <- ifelse(df[, var] == cat, 1, 0)
+      names(df)[ncol(df)] <- paste0(var, "_", cat)
+    }
+  }
+  return(df)
+}
+
+# -------- rcs --------
+step_rcs <- function(df, vars_rcs, knots_list) {
+  for (var in vars_rcs) {
+    knots <- knots_list[[var]]
+    k <- length(knots)
+    res <- get_rcs(df[, var], knots)
+    colnames(res) <- paste0(var, "_rcs_", 1:(k - 1))
+    df <- bind_cols(df, res)
+  }
+  return(df)
+}
+
+# -------- add interaction terms --------
+step_interaction <- function(df, interaction_list) {
+  df_old <- df
+  for (interaction in interaction_list) {
+    var1 <- interaction[1]
+    var2 <- interaction[2]
+
+    # in case of categorical variable, or rcs, list all the possible combinations
+    vars1 <- names(df_old)[stringr::str_detect(names(df_old), var1)]
+    if (length(vars1) > 1) {
+      vars1 <- vars1[which(vars1 != var1)]
+    }
+    vars2 <- names(df_old)[stringr::str_detect(names(df_old), var2)]
+    if (length(vars2) > 1) {
+      vars2 <- vars2[which(vars2 != var2)]
+    }
+
+    for (term2 in vars2) {
+      for (term1 in vars1) {
+        df$new <- df[, term1] * df[, term2]
+        names(df)[ncol(df)] <- paste0(term1, "_by_", term2)
+      }
+    }
+  }
+  return(df)
+}
+
+# -------- get mean values from the original dataset --------
+get_mean <- function(df, vars_mean) {
+  means <- list()
+  for (var in vars_mean) {
+    if (is.numeric(df[, var])) {
+      means[[var]] <- mean(df[, var])
+    }
+  }
+  return(unlist(means))
+}
+
+# -------- centering all variables, including the interaction terms --------
+step_center <- function(df, vars_center, means) {
+  for (var in vars_center) {
+    df$new <- df[, var] - means[var]
+    names(df)[ncol(df)] <- paste0(var, "_C")
+  }
+  return(df)
 }
 
 # --------------------------
@@ -70,7 +149,10 @@ root.search <- function(
 
   # check if there are other variables in the model other than those in rcs_vars
   vars <- names(coef(model))
-  test <- sum(stringr::str_detect(vars, paste(c("(Intercept)", rcs_vars), collapse = "|"))) # add intercept
+  test <- sum(stringr::str_detect(
+    vars,
+    paste(c("(Intercept)", rcs_vars), collapse = "|")
+  )) # add intercept
   if (test != length(vars)) {
     # other variables in the model
     vars_other <- vars[

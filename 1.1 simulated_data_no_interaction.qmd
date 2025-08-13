@@ -22,6 +22,14 @@ library(fastDummies) # make dummy variables
 library(rms)
 
 source("R/util.rcs.R")
+# functions in "util.rcs.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
 ```
 
 # Simulate data for this tutorial
@@ -34,9 +42,9 @@ Resources:
 
 For this tutorial, we will use a simulated dataset with the following predictors:
 
--   `x1`: a categorical/dichotomous variable with 2 categories: `x1_cat1`, `x1_cat2`
+-   `x1`: a categorical/dichotomous variable with 2 categories: `cat1`, `cat2`
 
--   `x2`: a categorical variable with 3 categories: `x2_cat1`, `x2_cat2`, `x2_cat3`
+-   `x2`: a categorical variable with 3 categories: `cat1`, `cat2`, `cat3`
 
 -   `x3`: a continuous variable with normal distribution, used as it is
 
@@ -67,13 +75,13 @@ seed <- 100
 set.seed(seed)
 data <- data.frame(
   x1 = sample(
-    c("x1_cat1", "x1_cat2"),
+    c("cat1", "cat2"),
     size = n,
     replace = TRUE,
     prob = c(0.5, 0.5)
   ),
   x2 = sample(
-    c("x2_cat1", "x2_cat2", "x2_cat3"),
+    c("cat1", "cat2", "cat3"),
     size = n,
     replace = TRUE,
     prob = c(0.1, 0.4, 0.5)
@@ -87,32 +95,24 @@ data <- data.frame(
 table(data$x1)
 table(data$x2)
 
-# dummy variables
-data <- data %>%
-  mutate(
-    x1_cat2 = ifelse(x1 == "x1_cat2", 1, 0),
-    x2_cat2 = ifelse(x2 == "x2_cat2", 1, 0),
-    x2_cat3 = ifelse(x2 == "x2_cat3", 1, 0)
-  )
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data <- step_dummy(data, vars_cat)
 
-# rcs
+# -------- rcs --------
+# x4
 k_x4 <- 4
 rcs.fit <- rcs(data$x4, k_x4)
-rcs.fit_x4 <- labelled::remove_attributes(
-  rcs.fit,
-  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
-)
-colnames(rcs.fit_x4) <- paste0("x4_rcs_", 1:(k_x4 - 1))
-
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
 k_x6 <- 3
 rcs.fit <- rcs(data$x6, k_x6)
-rcs.fit_x6 <- labelled::remove_attributes(
-  rcs.fit,
-  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
-)
-colnames(rcs.fit_x6) <- paste0("x6_rcs_", 1:(k_x6 - 1))
-
-data <- bind_cols(data, rcs.fit_x4, rcs.fit_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data <- step_rcs(data, vars_rcs, knots_list)
 
 # outcome
 data <- data %>%
@@ -261,16 +261,16 @@ data <- data %>%
 
 # --- linear regression model on `x2` ---"
 paste0(
-  "Mean outcome if `x2 == x2_cat1`: ",
-  mean(data$y[which(data$x2 == "x2_cat1")])
+  "Mean outcome if `x2 == cat1`: ",
+  mean(data$y[which(data$x2 == "cat1")])
 )
 paste0(
-  "Mean outcome if `x2 == x2_cat2`: ",
-  mean(data$y[which(data$x2 == "x2_cat2")])
+  "Mean outcome if `x2 == cat2`: ",
+  mean(data$y[which(data$x2 == "cat2")])
 )
 paste0(
-  "Mean outcome if `x2 == x2_cat3`: ",
-  mean(data$y[which(data$x2 == "x2_cat3")])
+  "Mean outcome if `x2 == cat3`: ",
+  mean(data$y[which(data$x2 == "cat3")])
 )
 fit <- lm(y ~ x2, data = data)
 coef(fit)
@@ -714,97 +714,38 @@ coef(fit.c)
 Using the original or centered model, using the same predictors should result in the same predicted values.
 
 ```{r}
-# define function for data processing - can be further generalized
-
-# -------- dummy variables --------
-step_dummy <- function(df) {
-  df <- df %>%
-    mutate(
-      x1_cat2 = ifelse(x1 == "x1_cat2", 1, 0),
-      x2_cat2 = ifelse(x2 == "x2_cat2", 1, 0),
-      x2_cat3 = ifelse(x2 == "x2_cat3", 1, 0)
-    )
-
-  return(df)
-}
-
-# -------- rcs --------
-rcs.fit <- rcs(data$x4, k_x4)
-knots_x4 <- attributes(rcs.fit)$parms # knot locations
-rcs.fit <- rcs(data$x6, k_x6)
-knots_x6 <- attributes(rcs.fit)$parms # knot locations
-
-step_rcs <- function(df, knots_x4, knots_x6) {
-  k_x4 <- length(knots_x4)
-  res <- get_rcs(df$x4, knots_x4)
-  colnames(res) <- paste0("x4_rcs_", 1:(k_x4 - 1))
-  df <- bind_cols(df, res)
-
-  k_x6 <- length(knots_x6)
-  res <- get_rcs(df$x6, knots_x6)
-  colnames(res) <- paste0("x6_rcs_", 1:(k_x6 - 1))
-  df <- bind_cols(df, res)
-
-  return(df)
-}
-
-# -------- centering all variables, including the interaction terms --------
-means <- c(
-  mean(data$x1_cat2),
-  mean(data$x2_cat2),
-  mean(data$x2_cat3),
-  mean(data$x3),
-  mean(data$x4_rcs_1),
-  mean(data$x4_rcs_2),
-  mean(data$x4_rcs_3),
-  mean(data$x5),
-  mean(data$x6_rcs_1),
-  mean(data$x6_rcs_2)
-)
-vars <- c(
-  "x1_cat2",
-  "x2_cat2",
-  "x2_cat3",
-  "x3",
-  "x4_rcs_1",
-  "x4_rcs_2",
-  "x4_rcs_3",
-  "x5",
-  "x6_rcs_1",
-  "x6_rcs_2"
-)
-means <- setNames(means, vars)
-
-step_center <- function(df, means) {
-  df <- df %>%
-    mutate(
-      x1_cat2_C = x1_cat2 - means["x1_cat2"],
-      x2_cat2_C = x2_cat2 - means["x2_cat2"],
-      x2_cat3_C = x2_cat3 - means["x2_cat3"],
-      x3_C = x3 - means["x3"],
-      x4_rcs_1_C = x4_rcs_1 - means["x4_rcs_1"],
-      x4_rcs_2_C = x4_rcs_2 - means["x4_rcs_2"],
-      x4_rcs_3_C = x4_rcs_3 - means["x4_rcs_3"],
-      x5_C = x5 - means["x5"],
-      x6_rcs_1_C = x6_rcs_1 - means["x6_rcs_1"],
-      x6_rcs_2_C = x6_rcs_2 - means["x6_rcs_2"]
-    )
-
-  return(df)
-}
-```
-
-```{r}
 # a test subset, only selecting the original predictors
 set.seed(100)
 test <- sample_n(data %>% select(x1:x6, y), 100)
 
-# process the test data
-test <- test %>% 
-  step_dummy() %>%
-  step_rcs(knots_x4, knots_x6) %>%
-  step_center(means)
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+test <- step_dummy(test, vars_cat)
 
+# -------- rcs --------
+# x4
+k_x4 <- 4
+rcs.fit <- rcs(data$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+test <- step_rcs(test, vars_rcs, knots_list)
+
+# -------- centering --------
+vars_mean <- names(test)
+# get mean values from the ORIGINAL dataset
+means <- get_mean(data, vars_mean)
+# centering vars in the test dataset
+vars_center <- names(means)
+test <- step_center(test, vars_center, means)
+
+# -------- prediction --------
 # predicted values using the original model
 test$pred.o <- predict(fit.o, newdata = test)
 
