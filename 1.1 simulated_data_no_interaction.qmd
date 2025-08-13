@@ -714,12 +714,6 @@ coef(fit.c)
 Using the original or centered model, using the same predictors should result in the same predicted values.
 
 ```{r}
-# a test subset, only selecting the original predictors
-set.seed(100)
-test <- sample_n(data %>% select(x1:x6, y), 100)
-```
-
-```{r}
 # define function for data processing - can be further generalized
 
 # -------- dummy variables --------
@@ -801,6 +795,10 @@ step_center <- function(df, means) {
 ```
 
 ```{r}
+# a test subset, only selecting the original predictors
+set.seed(100)
+test <- sample_n(data %>% select(x1:x6, y), 100)
+
 # process the test data
 test <- test %>% 
   step_dummy() %>%
