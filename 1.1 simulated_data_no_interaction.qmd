@@ -20,6 +20,7 @@ library(ggplot2) # Data visualization
 library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
+library(labelled)
 
 source("R/util.R")
 # functions in "util.R"
@@ -757,6 +758,37 @@ test$pred.o == test$pred.c
 test$pred.o-test$pred.c
 ```
 
-```{r}
+---
 
+## Visual Confirmation of Curve Shape
+
+To visually confirm that centering the individual RCS basis functions does not alter the dose-response curve, we can plot the predictions from both the original model and the centered model. The following plot shows the curves are identical.
+
+```{r}
+# Visual confirmation that the curve shape is unchanged
+
+# 1. Fit a model on the original (uncentered) RCS basis functions for x4
+fit.original_rcs <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3, data = data)
+
+# 2. Fit a model on the centered RCS basis functions for x4
+fit.centered_rcs <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
+
+# 3. Generate predictions for both models
+data$pred_o <- predict(fit.original_rcs, newdata = data)
+data$pred_c <- predict(fit.centered_rcs, newdata = data)
+
+# 4. Plot the results
+ggplot(data, aes(x = x4, y = y)) +
+  geom_point(alpha = 0.1, color = "grey") + # Raw data
+  geom_line(aes(y = pred_o, color = "Original RCS Terms"), linewidth = 1.2) +
+  geom_line(aes(y = pred_c, color = "Centered RCS Terms"), linetype = "dashed", linewidth = 1.2) +
+  labs(
+    title = "Comparing Spline Curves",
+    subtitle = "Original Model vs. Model with Centered RCS Terms",
+    y = "Outcome (y)",
+    x = "Predictor (x4)",
+    color = "Model Type"
+  ) +
+  scale_color_manual(values = c("Original RCS Terms" = "blue", "Centered RCS Terms" = "red")) +
+  theme_minimal()
 ```
