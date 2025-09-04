@@ -401,7 +401,6 @@ res <- labelled::remove_attributes(
 ) # don't print the attributes
 print(head(res))
 
-source("R/util.rcs.R", echo = TRUE)
 res <- get_rcs(data$x4, knots)
 print(head(res))
 ```
