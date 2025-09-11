@@ -491,7 +491,7 @@ res
 ```
 
 ```{r}
-# The original model with the updated means
+# The centered model with the updated means
 res <- calibration(data.val.means.val$pred, data.val.means.val$y, labelPos.x = 1000, labelPos.y = 4500, marginPlt = TRUE)
 res
 ```
