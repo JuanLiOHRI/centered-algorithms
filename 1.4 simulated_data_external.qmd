@@ -66,7 +66,6 @@ And we assume the outcome `y` is a linear combination of the predictors with som
 
 We will create two data sets, the development data set as in "1.2 simulated_data_wt_interaction.qmd", and an external data set where distribution of each variable is different, while the relationship between the outcome `y` and predictors remains the same.
 
-
 ```{r}
 # development data set
 n <- 1000
@@ -280,7 +279,6 @@ data %>%
   as_flex_table()
 ```
 
-
 # Original and centered model on the development dataset
 
 ```{r}
@@ -291,7 +289,6 @@ options(scipen = 999)
 fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4,k_x4) + x5 + rcs(x6,k_x6) + 
               x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4,k_x4) + x3*rcs(x4,k_x4) + rcs(x4,k_x4)*rcs(x6,k_x6), data = data.dev)
 ```
-
 
 ```{r}
 # Get the centered variables and terms
@@ -334,7 +331,6 @@ means.dev <- get_mean(data.dev, vars_mean)
 vars_center <- names(means.dev)
 data.dev <- step_center(data.dev, vars_center, means.dev)
 ```
-
 
 ```{r}
 # The centered model on the development dataset
@@ -394,11 +390,11 @@ head(data.dev$pred.o - data.dev$pred.c)
 
 # Transport the model to the external dataset
 
-Two __VERY IMPORTANT__ notes:
+Two **VERY IMPORTANT** notes:
 
-- Using the knot locations from the DEVELOPMENT datasets.
+-   Using the knot locations from the DEVELOPMENT datasets.
 
-- When re-centering in the external datasets using the new means, rememeber to update the intercept with the outcome mean in the EXTERNAL dataset.
+-   When re-centering in the external datasets using the new means, rememeber to update the intercept with the outcome mean in the EXTERNAL dataset.
 
 Also, it's confirmed below that using the original model and the centered model with original means on the external dataset have the same predicted values.
 

@@ -1,0 +1,567 @@
+---
+title: "Centered algorithms using real data - Linear regression"
+author: "Juan Li"
+date: 2025-09-11
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(patchwork)
+library(fastDummies) # make dummy variables
+library(rms)
+
+source("R/util.R") 
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+# Dataset: California Housing Prices
+
+We will use the [California Housing Prices](https://www.kaggle.com/datasets/camnugent/california-housing-prices) dataset for the examples.
+
+About this file
+
+1.  `longitude`: A measure of how far west a house is; a higher value is farther west
+
+2.  `latitude`: A measure of how far north a house is; a higher value is farther north
+
+3.  `housing_median_age`: Median age of a house within a block; a lower number is a newer building
+
+4.  `total_rooms`: Total number of rooms within a block
+
+5.  `total_bedrooms`: Total number of bedrooms within a block
+
+6.  `population`: Total number of people residing within a block
+
+7.  `households`: Total number of households, a group of people residing within a home unit, for a block
+
+8.  `median_income`: Median income for households within a block of houses (measured in tens of thousands of US Dollars)
+
+9.  __Outcome__: `median_house_value`: Median house value for households within a block (measured in US Dollars). 
+
+10. `ocean_proximity`: Location of the house w.r.t ocean/sea
+
+```{r}
+data <- read.csv("data/housing.csv", stringsAsFactors = TRUE)
+dim(data)
+
+# there is only a few observations with missing data, for simplicity, remove `NA`s
+data <- data[complete.cases(data), ]
+dim(data)
+
+summary(data)
+```
+
+## Some data cleaning
+
+There are only 5 observation where `ocean_proximity == ISLAND`. Remove this in the analysis.
+
+```{r}
+data <- data %>% filter(ocean_proximity != "ISLAND") %>% droplevels()
+dim(data)
+summary(data)
+```
+
+Remove the space in `ocean_proximity` levels to avoid some syntax issue later.
+
+```{r}
+levels(data$ocean_proximity) <- gsub(" ", "_", levels(data$ocean_proximity))
+dim(data)
+summary(data)
+```
+
+Histograms of each continuous variable
+
+```{r}
+dflong <- pivot_longer(data, -ocean_proximity, names_to = "variable", values_to = "value")
+
+ggplot(dflong, aes(value)) +
+  geom_histogram()+
+  facet_wrap(~variable, scales = "free")+
+  theme_minimal()+
+  labs(title = "Histogram of each continuous variable")
+```
+
+Notice the capping (ceiling effect) of `housing_median_age` and `median_house_value`. Crop the data for a simpler example, also because we have a huge dataset to work with.
+
+```{r}
+data <- data %>% 
+  filter(
+    median_house_value < max(data$median_house_value),
+    housing_median_age < max(data$housing_median_age))
+
+dflong <- pivot_longer(data, -ocean_proximity, names_to = "variable", values_to = "value")
+
+ggplot(dflong, aes(value)) +
+  geom_histogram()+
+  facet_wrap(~variable, scales = "free")+
+  theme_minimal()+
+  labs(title = "Histogram of each continuous variable")
+
+summary(data)
+```
+
+## Data sampling
+
+```{r}
+# random split the data into trian/test = 0.7/0.3
+set.seed(101) # Set Seed so that same sample can be reproduced in future also
+# Now Selecting 75% of data as sample from total 'n' rows of the data  
+sample <- sample.int(n = nrow(data), size = floor(.7*nrow(data)), replace = F)
+vec <- rep("", nrow(data))
+vec[sample] <- "train"
+vec[-sample] <- "test"
+data$type <- vec
+data$type <- factor(data$type, levels= c("train", "test"))
+
+train <- data %>% filter(type == "train") 
+test <- data %>% filter(type == "test")
+```
+
+For a large dataset like the California Housing Prices, the distributions of each variable in train and test datasets, including the outcome, can be very close by random sampling.
+
+```{r}
+library(gtsummary)
+
+data %>% 
+  tbl_summary(by = "type") %>% 
+  modify_header(label = "**Variable**") %>% # update the column header
+  modify_caption("Table 1. Summary of the two datasets") %>%
+  bold_labels() %>% 
+  as_flex_table()
+
+train <- train %>% select(-type)
+test <- test %>% select(-type)
+```
+
+# Data visualization
+
+Below visualize the relationship between `median_house_value` and other continuous variables in the `train` dataset. _Note:_ Because of the large sample size, the data points are omited, only the fitted lines are shown. The thicker black lines are for the overall relationship.
+
+```{r}
+# pivot the data longer to plot in facets
+dflong <- pivot_longer(train, -c(median_house_value, ocean_proximity), names_to = "variable", values_to = "value")
+
+ggplot(dflong, aes(value, median_house_value, color = ocean_proximity)) +
+  #geom_point(alpha = 0.2) +
+  geom_smooth(group = 1, color = "black", linewidth = 2, method = "loess", formula = 'y ~ x', se = FALSE)+
+  geom_smooth(method = "loess", formula = 'y ~ x', se = FALSE)+
+  facet_wrap(~variable, scales = "free")+
+  theme_minimal()+
+  labs(title = "Figure 1")
+
+ggplot(dflong, aes(value, median_house_value, color = ocean_proximity)) +
+  #geom_point(alpha = 0.2) +
+  geom_smooth(group = 1, color = "black", linewidth = 2, method = "lm", formula = 'y ~ x', se = FALSE)+
+  geom_smooth(method = "lm", formula = 'y ~ x', se = FALSE)+
+  facet_wrap(~variable, scales = "free")+
+  theme_minimal()+
+  labs(title = "Figure 2")
+```
+
+From __Figures 1,2__, it appears that
+
+1. `longitude` and `latitude` should be nonlinear terms
+
+2. Should consider the interaction between `ocean_proximity` with `households`, `housing_median_age`, `latitude`, `longitude`, `population`, `total_bedrooms`, `total_rooms`
+
+__Note:__ this is just a visual inspection to create an example, more tests may be required if working on a real project.
+
+## rcs of `longitude` and `latitude`
+
+Explore the number of knots. From the figure below, I'll use `rcs(longitude, 5)`.
+
+```{r}
+# longitude
+p1 <- ggplot(train, aes(longitude, median_house_value)) +
+  geom_smooth(method = "loess", formula = 'y ~ x', se = FALSE, color = "black")+
+  labs(title = "Loess Smooth") +
+  theme_bw()
+
+p2 <- ggplot(train, aes(longitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,3)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 3 knots") +
+  theme_bw()
+
+p3 <- ggplot(train, aes(longitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,4)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 4 knots") +
+  theme_bw()
+
+p4 <- ggplot(train, aes(longitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,5)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 5 knots") +
+  theme_bw()
+
+p5 <- ggplot(train, aes(longitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,6)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 6 knots") +
+  theme_bw()
+
+design <- "
+  123
+  45#
+"
+p1 + p2 + p3 + p4 + p5 + plot_layout(design = design)
+```
+
+From the figure below, I'll use `rcs(latitude, 4)`.
+
+```{r}
+# latitude
+p1 <- ggplot(train, aes(latitude, median_house_value)) +
+  geom_smooth(method = "loess", formula = 'y ~ x', se = FALSE, color = "black")+
+  labs(title = "Loess Smooth") +
+  theme_bw()
+
+p2 <- ggplot(train, aes(latitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,3)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 3 knots") +
+  theme_bw()
+
+p3 <- ggplot(train, aes(latitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,4)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 4 knots") +
+  theme_bw()
+
+p4 <- ggplot(train, aes(latitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,5)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 5 knots") +
+  theme_bw()
+
+p5 <- ggplot(train, aes(latitude, median_house_value)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,6)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 6 knots") +
+  theme_bw()
+
+design <- "
+  123
+  45#
+"
+p1 + p2 + p3 + p4 + p5 + plot_layout(design = design)
+```
+
+# Original and centered models using the `train` dataset
+
+```{r}
+# The original model
+options(scipen = 999)
+
+fit.o <- lm(median_house_value ~ 
+  ocean_proximity * rcs(longitude, 5)  + 
+  ocean_proximity * rcs(latitude, 4)  +
+  ocean_proximity * housing_median_age  +
+  ocean_proximity * total_rooms  +
+  ocean_proximity * total_bedrooms  +
+  ocean_proximity * population  +
+  ocean_proximity * households  +
+  median_income, data = train)
+summary(fit.o)
+```
+
+```{r}
+# Get the centered variables and terms
+
+# -------- dummy variables --------
+vars_cat <- c("ocean_proximity")
+train <- step_dummy(train, vars_cat)
+
+# -------- rcs --------
+# longitude
+rcs.fit <- rcs(train$longitude, 5)
+knots_longitude_train <- attributes(rcs.fit)$parms # knot locations
+# latitude
+rcs.fit <- rcs(train$latitude, 4)
+knots_latitude_train <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("longitude", "latitude")
+knots_list <- list(knots_longitude_train, knots_latitude_train)
+knots_list <- setNames(knots_list, vars_rcs)
+train <- step_rcs(train, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("ocean_proximity", "longitude"),
+  c("ocean_proximity", "latitude"),
+  c("ocean_proximity", "housing_median_age"),
+  c("ocean_proximity", "total_rooms"),
+  c("ocean_proximity", "total_bedrooms"),
+  c("ocean_proximity", "population"),
+  c("ocean_proximity", "households")
+)
+train <- step_interaction(train, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(train)
+# get mean values
+means_train <- get_mean(train, vars_mean)
+# centering vars in the train dataset
+vars_center <- names(means_train)
+train <- step_center(train, vars_center, means_train)
+```
+
+```{r}
+# The centered model on the trin dataset
+paste0("Mean outcome in the dataset: ", mean(train$median_house_value))
+
+# get names of all the centered terms
+vec <- names(train %>% select(contains("_C")) %>% select(-median_house_value_C))
+
+# reorganize to get the formula (based on the order in the original model)
+vec_names <- c(
+  vec[9:11], # dummy: ocean_proximity
+  vec[12:18], # rcs(longitude, 5), rcs(latitude, 4)
+  vec[3:8],   # other variables
+  vec[19:length(vec)] # interaction terms
+)
+formula <- as.formula(paste0("median_house_value ~ ", paste(vec_names, collapse = " + ")))
+
+fit.c <- lm(formula, data = train)
+
+cbind(coef(fit.o), coef(fit.c))
+```
+
+# Further sampling
+
+In order to make the `test` dataset as if from a differnt sample/population, create two test sets, the cheaper houses and the more expensive houses. Also further sample 5% of each test sets for a easier visualization (calibration plot).
+
+```{r}
+test_cheap <- test %>% filter(median_house_value <= median(test$median_house_value))
+set.seed(31511)
+sample <- sample.int(n = nrow(test_cheap), size = floor(.05*nrow(test_cheap)), replace = F)
+test_cheap <- test_cheap[sample, ]
+
+test_expensive <- test %>% filter(median_house_value > median(test$median_house_value))
+set.seed(31511)
+sample <- sample.int(n = nrow(test_expensive), size = floor(.05*nrow(test_expensive)), replace = F)
+test_expensive <- test_expensive[sample, ]
+```
+
+```{r}
+df <- bind_rows(
+  train %>% select(longitude:ocean_proximity) %>% mutate(type = "train") ,
+  test_cheap %>% mutate(type = "test_cheap"), 
+  test_expensive %>% mutate(type = "test_expensive"))
+df$type <- factor(df$type, levels= c("train", "test_cheap", "test_expensive"))
+
+df %>% 
+  tbl_summary(by = "type") %>% 
+  modify_header(label = "**Variable**") %>% # update the column header
+  modify_caption("Table 2. Summary of the three datasets") %>%
+  bold_labels() %>% 
+  as_flex_table()
+```
+
+# Apply the models on the cheaper houses: `test_cheap` dataset
+
+```{r}
+# Preprocess the `test_cheap` dataset
+
+# -------- dummy variables --------
+vars_cat <- c("ocean_proximity")
+test_cheap <- step_dummy(test_cheap, vars_cat)
+
+# -------- rcs --------
+# IMPORTANT: using the knot locations in the `train` dataset
+vars_rcs <- c("longitude", "latitude")
+knots_list <- list(knots_longitude_train, knots_latitude_train) # SEE HERE!!
+knots_list <- setNames(knots_list, vars_rcs)
+test_cheap <- step_rcs(test_cheap, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("ocean_proximity", "longitude"),
+  c("ocean_proximity", "latitude"),
+  c("ocean_proximity", "housing_median_age"),
+  c("ocean_proximity", "total_rooms"),
+  c("ocean_proximity", "total_bedrooms"),
+  c("ocean_proximity", "population"),
+  c("ocean_proximity", "households")
+)
+test_cheap <- step_interaction(test_cheap, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(test_cheap)
+
+# 1. centering using the mean values in the `train` dataset
+test_cheap_means_train <- step_center(test_cheap, vars_center, means_train)
+
+# 2. centering using the mean values in the `test_cheap` dataset
+# get mean values
+means_test_cheap <- get_mean(test_cheap, vars_mean)
+# centering vars in the test_cheap dataset
+vars_center <- names(means_test_cheap)
+test_cheap_means_test_cheap <- step_center(test_cheap, vars_center, means_test_cheap)
+```
+
+```{r}
+# The original model on the test_cheap dataset
+test_cheap_means_train$pred.o <- predict(fit.o, newdata = test_cheap_means_train)
+
+# The centered model on the test_cheap dataset, using the mean values in the train dataset
+test_cheap_means_train$pred.c <- predict(fit.c, newdata = test_cheap_means_train)
+
+# The centered model on the test_cheap dataset, using the mean values in the test_cheap dataset
+# NOTE: need to manually changing the intercept to the new outconme mean
+paste0("Mean outcome in the dataset: ", mean(test_cheap_means_test_cheap$median_house_value))
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- mean(test_cheap_means_test_cheap$median_house_value)
+test_cheap_means_test_cheap$pred.c <- predict(fit.c.2, newdata = test_cheap_means_test_cheap)
+
+# To confirm that column 2 and 3 below are identical
+head(cbind(test_cheap_means_train$median_house_value, test_cheap_means_train$pred.o, 
+test_cheap_means_train$pred.c, test_cheap_means_test_cheap$pred.c))
+```
+
+## Some calibration plots on the test_cheap dataset
+
+Since `train` and `test_cheap` datasets are from the same population, recalibration doesn't have a strong effect.
+
+```{r}
+# ---------- Overall calibration ----------
+# The original model 
+res <- calibration(test_cheap_means_train$pred.o, test_cheap_means_train$median_house_value, labelPos.x = 30000, labelPos.y = 220000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The centered model with the original means 
+# It is confirm that this is the same as using the original model. Will be ommitted below.
+res <- calibration(test_cheap_means_train$pred.c, test_cheap_means_train$median_house_value, labelPos.x = 30000, labelPos.y = 220000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The centered model with the updated means
+res <- calibration(test_cheap_means_test_cheap$pred.c, test_cheap_means_test_cheap$median_house_value, labelPos.x = 30000, labelPos.y = 220000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# ---------- Calibration on ocean_proximity ----------
+# The original model 
+res <- calibration(test_cheap_means_train$pred.o, test_cheap_means_train$median_house_value, group = test_cheap_means_train$ocean_proximity, labelPos.x = 30000, labelPos.y = 220000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The original model with the updated means
+res <- calibration(test_cheap_means_test_cheap$pred.c, test_cheap_means_test_cheap$median_house_value, group = test_cheap_means_test_cheap$ocean_proximity, labelPos.x = 30000, labelPos.y = 220000, marginPlt = TRUE)
+res
+```
+
+# Apply the models on the more expensive houses: `test_expensive` dataset
+
+```{r}
+# Preprocess the `test_expensive` dataset
+
+# -------- dummy variables --------
+vars_cat <- c("ocean_proximity")
+test_expensive <- step_dummy(test_expensive, vars_cat)
+
+# -------- rcs --------
+# IMPORTANT: using the knot locations in the `train` dataset
+vars_rcs <- c("longitude", "latitude")
+knots_list <- list(knots_longitude_train, knots_latitude_train) # SEE HERE!!
+knots_list <- setNames(knots_list, vars_rcs)
+test_expensive <- step_rcs(test_expensive, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("ocean_proximity", "longitude"),
+  c("ocean_proximity", "latitude"),
+  c("ocean_proximity", "housing_median_age"),
+  c("ocean_proximity", "total_rooms"),
+  c("ocean_proximity", "total_bedrooms"),
+  c("ocean_proximity", "population"),
+  c("ocean_proximity", "households")
+)
+test_expensive <- step_interaction(test_expensive, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(test_expensive)
+
+# 1. centering using the mean values in the `train` dataset
+test_expensive_means_train <- step_center(test_expensive, vars_center, means_train)
+
+# 2. centering using the mean values in the `test_expensive` dataset
+# get mean values
+means_test_expensive <- get_mean(test_expensive, vars_mean)
+# centering vars in the test_expensive dataset
+vars_center <- names(means_test_expensive)
+test_expensive_means_test_expensive <- step_center(test_expensive, vars_center, means_test_expensive)
+```
+
+```{r}
+# The original model on the test_expensive dataset
+test_expensive_means_train$pred.o <- predict(fit.o, newdata = test_expensive_means_train)
+
+# The centered model on the test_expensive dataset, using the mean values in the train dataset
+test_expensive_means_train$pred.c <- predict(fit.c, newdata = test_expensive_means_train)
+
+# The centered model on the test_expensive dataset, using the mean values in the test_expensive dataset
+# NOTE: need to manually changing the intercept to the new outconme mean
+paste0("Mean outcome in the dataset: ", mean(test_expensive_means_test_expensive$median_house_value))
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- mean(test_expensive_means_test_expensive$median_house_value)
+test_expensive_means_test_expensive$pred.c <- predict(fit.c.2, newdata = test_expensive_means_test_expensive)
+
+# To confirm that column 2 and 3 below are identical
+head(cbind(test_expensive_means_train$median_house_value, test_expensive_means_train$pred.o, 
+test_expensive_means_train$pred.c, test_expensive_means_test_expensive$pred.c))
+```
+
+## Some calibration plots on the test_expensive dataset
+
+Since `train` and `test_expensive` datasets are from the same population, recalibration doesn't have a strong effect.
+
+```{r}
+# ---------- Overall calibration ----------
+# The original model 
+res <- calibration(test_expensive_means_train$pred.o, test_expensive_means_train$median_house_value, labelPos.x = 200000, labelPos.y = 450000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The centered model with the updated means
+res <- calibration(test_expensive_means_test_expensive$pred.c, test_expensive_means_test_expensive$median_house_value, labelPos.x = 200000, labelPos.y = 450000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# ---------- Calibration on ocean_proximity ----------
+# The original model 
+res <- calibration(test_expensive_means_train$pred.o, test_expensive_means_train$median_house_value, group = test_expensive_means_train$ocean_proximity, labelPos.x = 200000, labelPos.y = 450000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The original model with the updated means
+res <- calibration(test_expensive_means_test_expensive$pred.c, test_expensive_means_test_expensive$median_house_value, group = test_expensive_means_test_expensive$ocean_proximity, labelPos.x = 200000, labelPos.y = 450000, marginPlt = TRUE)
+res
+```
+
+```{r}
+
+```
