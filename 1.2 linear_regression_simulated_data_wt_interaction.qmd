@@ -511,6 +511,78 @@ fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2
 coef(fit.c)
 ```
 
+```{r}
+# checking when only know value of one variable
+df <- data.frame(
+  x1 = c("cat1", "cat2", rep(NA, 7)), 
+  x2 = c(NA, NA, "cat1", "cat2", "cat3", rep(NA, 4)),
+  x3 = c(rep(NA,5), 90, rep(NA,3)),
+  x4 = c(rep(NA,6), 50, rep(NA,2)),
+  x5 = c(rep(NA,7), 30, NA),
+  x6 = c(rep(NA,8), 15)
+)
+
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+df <- step_dummy(df, vars_cat)
+
+# -------- rcs --------
+# x4
+k_x4 <- 4
+rcs.fit <- rcs(data$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+df <- step_rcs(df, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+df <- step_interaction(df, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(df)
+# get mean values from the ORIGINAL dataset
+means <- get_mean(data, vars_mean)
+# centering vars in the df dataset
+vars_center <- names(means)
+df <- step_center(df, vars_center, means)
+
+# -------- replace NAs using 0 -------------
+for (var_C in paste0(vars_center, "_C")) {
+  df[[var_C]] <- ifelse(is.na(df[[var_C]]), 0, df[[var_C]])
+}
+
+# -------- prediction --------
+# predicted values using the centered model
+df$pred.c <- predict(fit.c, newdata = df)
+
+vec <- rep(0, nrow(df))
+vec[1] <- mean(data$y[data$x1 == "cat1"])
+vec[2] <- mean(data$y[data$x2 == "cat2"])
+vec[3] <- mean(data$y[data$x2 == "cat1"])
+vec[4] <- mean(data$y[data$x2 == "cat2"])
+vec[5] <- mean(data$y[data$x2 == "cat3"])
+vec[6] <- mean(data$y[data$x3 == 90])
+vec[7] <- mean(data$y[data$x4 == 50])
+vec[8] <- mean(data$y[data$x5 == 30])
+vec[9] <- mean(data$y[data$x6 == 15])
+
+cbind(vec, df$pred.c)
+```
+
 ## test
 
 Using the original or centered model, using the same predictors should result in the same predicted values.

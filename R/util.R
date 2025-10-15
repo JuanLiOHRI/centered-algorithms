@@ -34,13 +34,26 @@ get_rcs <- function(x, knots) {
 # define function for data processing
 
 # -------- dummy variables --------
-step_dummy <- function(df, vars_cat) {
-  for (var in vars_cat) {
-    if (!is.null(levels(df[, var]))) {
-      cats <- levels(df[, var])
-    } else {
-      cats <- sort(unique(df[, var]))
+step_dummy <- function(df, vars_cat, labList = NULL) {
+
+  if (!is.null(labList)) {
+    if (length(labList) != length(vars_cat)) {
+      stop("labList must have the same length as vars_cat")
     }
+  } else {
+    labList <- list()
+    for (var in vars_cat) { 
+      if (!is.null(levels(df[, var]))) {
+        cats <- levels(df[, var])
+      } else {
+        cats <- sort(unique(df[, var]))
+      }
+      labList[[var]] <- cats
+    }
+  }
+
+  for (var in vars_cat) {
+    cats <- labList[[var]]
     for (cat in cats[-1]) {
       df$new <- ifelse(df[, var] == cat, 1, 0)
       names(df)[ncol(df)] <- paste0(var, "_", cat)
@@ -106,6 +119,20 @@ step_center <- function(df, vars_center, means) {
     names(df)[ncol(df)] <- paste0(var, "_C")
   }
   return(df)
+}
+
+# --------------------------
+# a function to manually calculate log likehood when some of the coefficients are manually changed
+# modified from https://stackoverflow.com/questions/39627615/calculating-loglik-by-hand-from-a-logistic-regression
+get_logLik <- function(outcome, prediction, coefficients, family = binomial(logit)) {
+    n <- length(outcome)
+    wt <- rep(1, n) # or s_model$prior_weights if field exists
+    deviance <- sum(family$dev.resids(outcome, prediction, wt))
+    mod_rank <- sum(!is.na(coefficients)) # or s_model$rank if field exists
+
+    aic <- family$aic(outcome, rep(1, n), prediction, wt, deviance) + 2 * mod_rank
+    log_lik <- mod_rank - aic/2
+    return(log_lik)
 }
 
 # --------------------------

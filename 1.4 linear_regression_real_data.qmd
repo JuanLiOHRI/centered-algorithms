@@ -1,0 +1,321 @@
+---
+title: "Centered algorithms using real data - Linear regression"
+author: "Juan Li"
+date: 2025-09-18
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(patchwork)
+library(fastDummies) # make dummy variables
+library(rms)
+
+source("R/util.R") 
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+# Dataset: Medical Cost Personal Datasets
+
+We will use the [Medical Cost Personal Datasets](https://www.kaggle.com/datasets/mirichoi0218/insurance) dataset for the examples.
+
+About this dataset
+
+1.  `age`: continuous. Age of primary beneficiary, range from 18 to 64 years old.
+
+2.  `sex`: categorical. Insurance contractor gender: female, male.
+
+3.  `bmi`: continuous. Body mass index, providing an understanding of body, weights that are relatively high or low relative to height, objective index of body weight (kg / m \^ 2) using the ratio of height to weight, ideally 18.5 to 24.9. Range from 15.96 to 53.13.
+
+4.  `children`: continuous. Number of children covered by health insurance / Number of dependents. Range from 0 to 5.
+
+5.  `smoker`: categorical. Smoking status: no, yes.
+
+6.  `region`: categorical. The beneficiary's residential area in the US, northeast, southeast, southwest, northwest.
+
+7.  **Outcome**: `charges`: Individual medical costs billed by health insurance
+
+```{r}
+data <- read.csv("data/insurance.csv", stringsAsFactors = TRUE)
+dim(data) # there is no missing data in this dataset
+summary(data)
+```
+
+## Data sampling
+
+First, we summarize the predictor and outcome distribution in the four regions. The dataset is age- and sex-balanced across the regions.
+
+```{r}
+library(gtsummary)
+
+data %>% 
+  tbl_summary(by = "region") %>% 
+  modify_header(label = "**Variable**") %>% # update the column header
+  modify_caption("Table 1. Summary of the two datasets") %>%
+  bold_labels() %>% 
+  as_flex_table()
+```
+
+For the purpose of this example, I'll use data of the `northeast` region as train data, and transport the model to and test it on the `southeast` region.
+
+```{r}
+train <- data %>% filter(region == "northeast") %>% select(-region)
+test <- data %>% filter(region == "southeast") %>% select(-region)
+```
+
+# Data visualization
+
+Below visualize the relationship between `charges` and other continuous variables in the `train` dataset.
+
+```{r}
+# pivot the data longer to plot in facets
+dflong <- pivot_longer(
+  train,
+  -c(charges, sex, smoker),
+  names_to = "variable",
+  values_to = "value"
+)
+
+for (var in c("sex", "smoker")) {
+  dfPlt <- dflong %>% select(value, charges, variable, all_of(var))
+  names(dfPlt)[ncol(dfPlt)] <- "var"
+  p1 <- ggplot(dfPlt, aes(value, charges, color = var)) +
+    geom_point(alpha = 0.2) +
+    geom_smooth(
+      group = 1,
+      color = "black",
+      linewidth = 2,
+      method = "loess",
+      formula = 'y ~ x',
+      se = FALSE
+    ) +
+    geom_smooth(method = "loess", formula = 'y ~ x', se = FALSE) +
+    facet_wrap(~variable, scales = "free") +
+    theme_minimal() +
+    labs(title = "Loess", color = var)
+
+  p2 <- ggplot(dfPlt, aes(value, charges, color = var)) +
+    geom_point(alpha = 0.2) +
+    geom_smooth(
+      group = 1,
+      color = "black",
+      linewidth = 2,
+      method = "lm",
+      formula = 'y ~ x',
+      se = FALSE
+    ) +
+    geom_smooth(method = "lm", formula = 'y ~ x', se = FALSE) +
+    facet_wrap(~variable, scales = "free") +
+    theme_minimal() +
+    labs(title = "Lm", color = var)
+
+  print(ggarrange(p1, p2, ncol = 2, common.legend = TRUE))
+}
+```
+
+```{r}
+library(corrplot)
+
+# -------- dummy variables --------
+vars_cat <- c("sex", "smoker")
+train <- step_dummy(train, vars_cat)
+
+M <- cor(train %>% select(-c(sex, smoker)))
+corrplot(M, method = 'number') 
+```
+
+From above figures, it appears that
+
+1.  `age` should be a linear term, and `bmi` should be a nonlinear term.
+
+2.  Only consider the interaction between `smoker` and `bmi`
+
+**Note:** this is just a visual inspection to create an example, more tests may be required if working on a real project.
+
+## rcs of `bmi`
+
+Explore the number of knots. From the figure below, I'll use `rcs(bmi, 5)`.
+
+```{r}
+p1 <- ggplot(train, aes(bmi, charges)) +
+  geom_smooth(method = "loess", formula = 'y ~ x', se = FALSE, color = "black")+
+  labs(title = "Loess Smooth") +
+  theme_bw()
+
+p2 <- ggplot(train, aes(bmi, charges)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,3)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 3 knots") +
+  theme_bw()
+
+p3 <- ggplot(train, aes(bmi, charges)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,4)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 4 knots") +
+  theme_bw()
+
+p4 <- ggplot(train, aes(bmi, charges)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,5)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 5 knots") +
+  theme_bw()
+
+p5 <- ggplot(train, aes(bmi, charges)) +
+  geom_smooth(method = "lm", formula = 'y ~ rcs(x,6)', se = FALSE, color = "blue")+
+  labs(title = "RCS, 6 knots") +
+  theme_bw()
+
+design <- "
+  123
+  45#
+"
+p1 + p2 + p3 + p4 + p5 + plot_layout(design = design)
+```
+
+# Original and centered models using the `train` dataset
+
+```{r}
+# The original model
+options(scipen = 999)
+
+fit.o <- lm(charges ~ 
+  age + sex + children + smoker * rcs(bmi, 5), data = train)
+summary(fit.o)
+```
+
+```{r}
+# Get the centered variables and terms
+# `step_dummy` already done above
+
+# -------- rcs --------
+# bmi
+rcs.fit <- rcs(train$bmi, 5)
+bmi_knots_train <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("bmi")
+knots_list <- list(bmi_knots_train)
+knots_list <- setNames(knots_list, vars_rcs)
+train <- step_rcs(train, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("smoker", "bmi")
+)
+train <- step_interaction(train, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(train)
+# get mean values
+means_train <- get_mean(train, vars_mean)
+# centering vars in the train dataset
+vars_center <- names(means_train)
+train <- step_center(train, vars_center, means_train)
+```
+
+```{r}
+# The centered model on the trin dataset
+paste0("Mean outcome in the dataset: ", mean(train$charges))
+
+fit.c <- lm(charges ~ 
+  age_C + sex_male_C + children_C + smoker_yes_C +
+  bmi_rcs_1_C + bmi_rcs_2_C + bmi_rcs_3_C + bmi_rcs_4_C +
+  smoker_yes_by_bmi_rcs_1_C + smoker_yes_by_bmi_rcs_2_C +
+  smoker_yes_by_bmi_rcs_3_C + smoker_yes_by_bmi_rcs_4_C, data = train)
+
+cbind(coef(fit.o), coef(fit.c))
+```
+
+# Apply the models on the `test` dataset
+
+```{r}
+# Preprocess the `test` dataset
+
+# -------- dummy variables --------
+test <- step_dummy(test, vars_cat)
+
+# -------- rcs --------
+# IMPORTANT: using the knot locations in the `train` dataset
+test <- step_rcs(test, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+test <- step_interaction(test, interaction_list)
+
+# -------- centering --------
+# 1. centering using the mean values in the `train` dataset
+test_means_train <- step_center(test, vars_center, means_train)
+
+# 2. centering using the mean values in the `test` dataset
+# get mean values
+means_test <- get_mean(test, vars_mean)
+# centering vars in the test dataset
+test_means_test <- step_center(test, vars_center, means_test)
+```
+
+```{r}
+# The original model on the test dataset
+test_means_train$pred.o <- predict(fit.o, newdata = test_means_train)
+
+# The centered model on the test dataset, using the mean values in the train dataset
+test_means_train$pred.c <- predict(fit.c, newdata = test_means_train)
+
+# The centered model on the test dataset, using the mean values in the test dataset
+# NOTE: need to manually changing the intercept to the new outconme mean
+paste0("Mean outcome in the dataset: ", mean(test_means_test$charges))
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- mean(test_means_test$charges)
+test_means_test$pred.c <- predict(fit.c.2, newdata = test_means_test)
+
+# To confirm that column 2 and 3 below are identical
+head(cbind(test_means_train$charges, test_means_train$pred.o, 
+test_means_train$pred.c, test_means_test$pred.c))
+```
+
+## Some calibration plots on the test dataset
+
+```{r}
+# ---------- Overall calibration ----------
+# The original model 
+res <- calibration(test_means_train$pred.o, test_means_train$charges, labelPos.x = 10000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The centered model with the updated means
+res <- calibration(test_means_test$pred.c, test_means_test$charges, labelPos.x = 10000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# ---------- Calibration on sex ----------
+# The original model 
+res <- calibration(test_means_train$pred.o, test_means_train$charges, group = test_means_train$sex, labelPos.x = 10000, marginPlt = TRUE)
+res
+```
+
+```{r}
+# The original model with the updated means
+res <- calibration(test_means_test$pred.c, test_means_test$charges, group = test_means_test$sex, labelPos.x = 10000, marginPlt = TRUE)
+res
+```
+
+```{r}
+
+```

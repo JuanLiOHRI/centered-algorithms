@@ -607,6 +607,36 @@ fit <- lm(y ~ x2_cat2_C + x2_cat3_C + x3_C, data = data)
 coef(fit)
 ```
 
+One thing to clarify is that, in the scenario when there is data of only one variable (say `x2 = cat1`), and missing for the other (`x3`, and imputed with mean value of `x2`), the predicted `y` is not equal to `mean(y)` when `x2 = cat1`, but rather to `y` when `x2 = cat1` and `x3 = mean(x3)`.
+
+```{r}
+df <- data.frame(
+  x2 = "cat1",
+  x3 = NA
+)
+
+# -------- dummy variables --------
+vars_cat <- c("x2")
+labList <- list(x2 = c("cat1", "cat2", "cat3"))
+df <- step_dummy(df, vars_cat,labList)
+
+# -------- centering --------
+vars_mean <- names(df)
+# get mean values from the ORIGINAL dataset
+means <- get_mean(data, vars_mean)
+# centering vars in the df dataset
+vars_center <- names(means)
+df <- step_center(df, vars_center, means)
+
+# -------- replace NAs using 0 -------------
+for (var_C in paste0(vars_center, "_C")) {
+  df[[var_C]] <- ifelse(is.na(df[[var_C]]), 0, df[[var_C]])
+}
+
+paste0("Mean outcome if `x2 == cat1`: ", mean(data$y[which(data$x2 == "cat1")]))
+paste0("Predicted value: ", predict(fit, newdata = df))
+```
+
 ## Centered algorithm for two *continuous* predictors without rcs
 
 I will not repeat the math here, just use below code to confirm that the intercept ($\beta_0$) of the centered algorithm is still $\overline{y}$, and values of other coefficients are not affected by centering.

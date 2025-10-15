@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.550">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Juan Li">
+<meta name="dcterms.date" content="2025-09-23">
+
+<title>Centered algorithms - Logistic regression</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="2.1 logistic_regression_simulated_data_files/libs/clipboard/clipboard.min.js"></script>
+<script src="2.1 logistic_regression_simulated_data_files/libs/quarto-html/quarto.js"></script>
+<script src="2.1 logistic_regression_simulated_data_files/libs/quarto-html/popper.min.js"></script>
+<script src="2.1 logistic_regression_simulated_data_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="2.1 logistic_regression_simulated_data_files/libs/quarto-html/anchor.min.js"></script>
+<link href="2.1 logistic_regression_simulated_data_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="2.1 logistic_regression_simulated_data_files/libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="2.1 logistic_regression_simulated_data_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="2.1 logistic_regression_simulated_data_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="2.1 logistic_regression_simulated_data_files/libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+
+  <script>window.backupDefine = window.define; window.define = undefined;</script><script src="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.js"></script>
+  <script>document.addEventListener("DOMContentLoaded", function () {
+ var mathElements = document.getElementsByClassName("math");
+ var macros = [];
+ for (var i = 0; i < mathElements.length; i++) {
+  var texText = mathElements[i].firstChild;
+  if (mathElements[i].tagName == "SPAN") {
+   katex.render(texText.data, mathElements[i], {
+    displayMode: mathElements[i].classList.contains('display'),
+    throwOnError: false,
+    macros: macros,
+    fleqn: false
+   });
+}}});
+  </script>
+  <script>window.define = window.backupDefine; window.backupDefine = undefined;</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.css">
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+  <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#dataset-heart-disease-dataset" id="toc-dataset-heart-disease-dataset" class="nav-link active" data-scroll-target="#dataset-heart-disease-dataset">Dataset: Heart Disease Dataset</a></li>
+  <li><a href="#logistic-regression" id="toc-logistic-regression" class="nav-link" data-scroll-target="#logistic-regression">Logistic regression</a></li>
+  <li><a href="#one-categoricaldichotomous-variable-sex" id="toc-one-categoricaldichotomous-variable-sex" class="nav-link" data-scroll-target="#one-categoricaldichotomous-variable-sex">One categorical/dichotomous variable: sex</a></li>
+  <li><a href="#one-continuous-variable-age" id="toc-one-continuous-variable-age" class="nav-link" data-scroll-target="#one-continuous-variable-age">One continuous variable: age</a>
+  <ul class="collapse">
+  <li><a href="#some-calibration-plots-on-the-test-dataset" id="toc-some-calibration-plots-on-the-test-dataset" class="nav-link" data-scroll-target="#some-calibration-plots-on-the-test-dataset">Some calibration plots on the test dataset</a></li>
+  </ul></li>
+  </ul>
+</nav>
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Centered algorithms - Logistic regression</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Juan Li </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">September 23, 2025</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<div class="cell">
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(dplyr) <span class="co"># Data manipulation</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyr) <span class="co"># Tidy messy data</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(ggplot2) <span class="co"># Data visualization</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(ggpubr) <span class="co"># ggarrange</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(patchwork)</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(fastDummies) <span class="co"># make dummy variables</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(rms)</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(pROC)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="fu">source</span>(<span class="st">"R/util.R"</span>) </span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="co"># functions in "util.R"</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="co"># get_rcs: implement the formula of rcs components</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="co"># step_dummy: dummy variables</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="co"># step_rcs: rcs</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="co"># step_interaction: interaction terms</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="co"># step_center: centering</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="co"># get_mean: get mean values from the original dataset</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="co"># get_logLik: a function to manually calculate log likehood when some of the coefficients are manually changed</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a><span class="co"># root.search: Root searching, not in use in this .qmd file</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="fu">source</span>(<span class="st">"R/calibration.R"</span>) <span class="co"># for calibration plots</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>In this notebook, we will explain the issues of centered algorithm in logistic regression and explore the potential work-around. We will start with univariate analysis to get the math right. Then in “2.2 logistic_regression_real_data.qmd”, we will put everything together.</p>
+<section id="dataset-heart-disease-dataset" class="level1">
+<h1>Dataset: Heart Disease Dataset</h1>
+<p>We will use the <a href="https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset">Heart Disease Dataset</a> dataset for the examples.</p>
+<p>About this dataset, see this [notebook] (https://www.kaggle.com/code/tentotheminus9/what-causes-heart-disease-explaining-the-model)</p>
+<ol type="1">
+<li><p><code>age</code>: continuous. The person’s age in years</p></li>
+<li><p><code>sex</code>: categorical. The person’s sex (1 = male, 0 = female)</p></li>
+<li><p><code>cp</code>: categorical. The chest pain experienced (0: typical angina, 1: atypical angina, 2: non-anginal pain, 3: asymptomatic)</p></li>
+<li><p><code>trestbps</code>: continuous. The person’s resting blood pressure (in mm Hg on admission to the hospital)</p></li>
+<li><p><code>chol</code>: continuous. The person’s serum cholestoral in mg/dl</p></li>
+<li><p><code>fbs</code>: categorical. The person’s fasting blood sugar (&gt; 120 mg/dl, 1 = true; 0 = false)</p></li>
+<li><p><code>restecg</code>: categorical. Resting electrocardiographic measurement (0 = normal, 1 = having ST-T wave abnormality, 2 = showing probable or definite left ventricular hypertrophy by Estes’ criteria)</p></li>
+<li><p><code>thalach</code>: continuous. The person’s maximum heart rate achieved</p></li>
+<li><p><code>exang</code>: categorical. Exercise induced angina (0 = no; 1 = yes)</p></li>
+<li><p><code>oldpeak</code>: continuous. ST depression induced by exercise relative to rest (‘ST’ relates to positions on the ECG plot. See more here)</p></li>
+<li><p><code>slope</code>: categorical. the slope of the peak exercise ST segment (0: upsloping, 1: flat, 2: downsloping)</p></li>
+<li><p><code>ca</code>: The number of major vessels (0-3) colored by flourosopy</p></li>
+<li><p><code>thal</code>: categorical. A blood disorder called thalassemia (1 = normal; 2 = fixed defect; 3 = reversable defect)</p></li>
+<li><p><code>target</code>: Heart disease (0 = no, 1 = yes)</p></li>
+</ol>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>data <span class="ot">&lt;-</span> <span class="fu">read.csv</span>(<span class="st">"data/heart.csv"</span>, <span class="at">stringsAsFactors =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(data) <span class="co"># there is no missing data in this dataset</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 1025   14</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>data <span class="ot">&lt;-</span> data <span class="sc">%&gt;%</span> <span class="fu">mutate</span>(<span class="at">thal =</span> <span class="fu">ifelse</span>(thal <span class="sc">==</span> <span class="dv">0</span>, <span class="dv">1</span>, thal)) <span class="co"># 7 cases that thal == 0, collapse levels to 1`</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>data_num <span class="ot">&lt;-</span> data</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co"># categorical variables</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>vars_cat <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">"sex"</span>, <span class="st">"cp"</span>, <span class="st">"fbs"</span>, <span class="st">"restecg"</span>, <span class="st">"exang"</span>, <span class="st">"slope"</span>, <span class="st">"thal"</span>)</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>data[vars_cat] <span class="ot">&lt;-</span> <span class="fu">lapply</span>(data[vars_cat], factor) </span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(data)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>      age        sex     cp         trestbps          chol     fbs     restecg
+ Min.   :29.00   0:312   0:497   Min.   : 94.0   Min.   :126   0:872   0:497  
+ 1st Qu.:48.00   1:713   1:167   1st Qu.:120.0   1st Qu.:211   1:153   1:513  
+ Median :56.00           2:284   Median :130.0   Median :240           2: 15  
+ Mean   :54.43           3: 77   Mean   :131.6   Mean   :246                  
+ 3rd Qu.:61.00                   3rd Qu.:140.0   3rd Qu.:275                  
+ Max.   :77.00                   Max.   :200.0   Max.   :564                  
+    thalach      exang      oldpeak      slope         ca         thal   
+ Min.   : 71.0   0:680   Min.   :0.000   0: 74   Min.   :0.0000   1: 71  
+ 1st Qu.:132.0   1:345   1st Qu.:0.000   1:482   1st Qu.:0.0000   2:544  
+ Median :152.0           Median :0.800   2:469   Median :0.0000   3:410  
+ Mean   :149.1           Mean   :1.072           Mean   :0.7541          
+ 3rd Qu.:166.0           3rd Qu.:1.800           3rd Qu.:1.0000          
+ Max.   :202.0           Max.   :6.200           Max.   :4.0000          
+     target      
+ Min.   :0.0000  
+ 1st Qu.:0.0000  
+ Median :1.0000  
+ Mean   :0.5132  
+ 3rd Qu.:1.0000  
+ Max.   :1.0000  </code></pre>
+</div>
+</div>
+</section>
+<section id="logistic-regression" class="level1">
+<h1>Logistic regression</h1>
+<p>For resources, see <a href="https://bookdown.org/brianmachut/uofm_analytics_r_hw_sol_2/logreg.html">here</a> and <a href="https://arunaddagatla.medium.com/maximum-likelihood-estimation-in-logistic-regression-f86ff1627b67">hear</a>.</p>
+<p>Formula of logistic regression: for a regression model with <span class="math inline">p</span> predictors,</p>
+<p><span class="math inline">p(X) = \frac{e^{\beta_0 + \beta_1X_1 + ... + \beta_pX_p}}{1+e^{\beta_0 + \beta_1X_1 + ... + \beta_pX_p}}</span></p>
+<p>The formula can also be written as:</p>
+<p><span class="math inline">\frac{p}{1-p} = e^{\beta_0 + \beta_1X_1 + ... + \beta_pX_p}</span></p>
+<p>Also as:</p>
+<p><span class="math inline">ln(\frac{p}{1-p}) = \beta_0 + \beta_1X_1 + ... + \beta_pX_p</span></p>
+<p>Then if the centering works as in linear regression (see quatro files 1.1 to 1.4), we would expect that, after centering, the new intercept</p>
+<p><span class="math inline">\beta_0^{centered} = ln(\frac{\overline{p}}{1-\overline{p}})</span>,</p>
+<p>where <span class="math inline">\overline{p}</span> is the outcome mean/prevalence of the case.</p>
+<p><strong>The issue is that, with the simple centering, the adjusted intercept is not identical to the logit (log-odds) of the outcome mean.</strong> That is because logistic regression models are fitted using <strong>Maximum Likelihood Estimation (MLE)</strong> instead of least squares as in linear regression.</p>
+</section>
+<section id="one-categoricaldichotomous-variable-sex" class="level1">
+<h1>One categorical/dichotomous variable: sex</h1>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>df <span class="ot">&lt;-</span> data <span class="sc">%&gt;%</span> <span class="fu">select</span>(sex, target)</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="co"># -------- dummy variables --------</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>vars_cat <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">"sex"</span>)</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>df <span class="ot">&lt;-</span> <span class="fu">step_dummy</span>(df, vars_cat)</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co"># -------- centering --------</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>vars_mean <span class="ot">&lt;-</span> <span class="fu">names</span>(df)</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="co"># get mean values</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>means <span class="ot">&lt;-</span> <span class="fu">get_mean</span>(df, vars_mean)</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="co"># centering vars</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>vars_center <span class="ot">&lt;-</span> <span class="fu">names</span>(means)</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>df <span class="ot">&lt;-</span> <span class="fu">step_center</span>(df, vars_center, means)</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(df)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>  sex target sex_1   target_C    sex_1_C
+1   1      0     1 -0.5131707  0.3043902
+2   1      0     1 -0.5131707  0.3043902
+3   1      0     1 -0.5131707  0.3043902
+4   1      0     1 -0.5131707  0.3043902
+5   0      0     0 -0.5131707 -0.6956098
+6   0      1     0  0.4868293 -0.6956098</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co"># fit the original model</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>fit.o <span class="ot">&lt;-</span> <span class="fu">glm</span>(target <span class="sc">~</span> sex, <span class="at">data =</span> df, <span class="at">family =</span> <span class="st">"binomial"</span>)</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co"># fit the centered model</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>fit.c <span class="ot">&lt;-</span> <span class="fu">glm</span>(target <span class="sc">~</span> sex_1_C, <span class="at">data =</span> df, <span class="at">family =</span> <span class="st">"binomial"</span>)</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co"># outcome mean</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>y_mean <span class="ot">&lt;-</span> <span class="fu">mean</span>(df<span class="sc">$</span>target)</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>y_mean_logit <span class="ot">&lt;-</span> <span class="fu">log</span>(y_mean<span class="sc">/</span>(<span class="dv">1</span><span class="sc">-</span>y_mean))</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Mean outcome: "</span>, y_mean)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Mean outcome: 0.513170731707317"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Logit (log-odds) of the mean outcome: "</span>, <span class="fu">log</span>(y_mean<span class="sc">/</span>(<span class="dv">1</span><span class="sc">-</span>y_mean)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Logit (log-odds) of the mean outcome: 0.0526951169861911"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># model coefficients</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="fu">cbind</span>(<span class="fu">coef</span>(fit.o), <span class="fu">coef</span>(fit.c))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                  [,1]        [,2]
+(Intercept)  0.9661877  0.07173594
+sex1        -1.2858528 -1.28585282</code></pre>
+</div>
+</div>
+<p>One simple work-around is to manually set the new intercept after centering using the logit of outcome mean. Below results confirm that this manual shifting only has a neglegible effect on the log likelihood, and no effect on AUC (because a constant shift doesn’t affect the ranking).</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co"># centered model, with manually setting the intercept to the mean outcome</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>fit.c<span class="fl">.2</span> <span class="ot">&lt;-</span> fit.c</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>fit.c<span class="fl">.2</span><span class="sc">$</span>coefficients[<span class="dv">1</span>] <span class="ot">&lt;-</span> y_mean_logit</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="co"># model coefficients</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cbind</span>(<span class="fu">coef</span>(fit.o), <span class="fu">coef</span>(fit.c), <span class="fu">coef</span>(fit.c<span class="fl">.2</span>))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                  [,1]        [,2]        [,3]
+(Intercept)  0.9661877  0.07173594  0.05269512
+sex1        -1.2858528 -1.28585282 -1.28585282</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co"># prediction: note `fit.o` and `fit.c` have the same predicted value, while `fit.c.2` has a different one</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>df<span class="sc">$</span>pred.o <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit.o, <span class="at">newdata =</span> df, <span class="at">type =</span> <span class="st">"response"</span>)</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>df<span class="sc">$</span>pred.c <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit.c, <span class="at">newdata =</span> df, <span class="at">type =</span> <span class="st">"response"</span>)</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>df<span class="sc">$</span>pred.c<span class="fl">.2</span> <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit.c<span class="fl">.2</span>, <span class="at">newdata =</span> df, <span class="at">type =</span> <span class="st">"response"</span>)</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(df <span class="sc">%&gt;%</span> <span class="fu">select</span>(<span class="fu">contains</span>(<span class="st">"pred"</span>)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>     pred.o    pred.c  pred.c.2
+1 0.4207574 0.4207574 0.4161239
+2 0.4207574 0.4207574 0.4161239
+3 0.4207574 0.4207574 0.4161239
+4 0.4207574 0.4207574 0.4161239
+5 0.7243590 0.7243590 0.7205410
+6 0.7243590 0.7243590 0.7205410</code></pre>
+</div>
+</div>
+<p>The log likelihood value can be manually calculated using function <code>get_logLik</code>, see <code>R/util.R</code>.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb18"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co"># log likelihood</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="co"># --- original model ---</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the original model, by extracting: "</span>, <span class="fu">logLik</span>(fit.o))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the original model, by extracting: -668.923871748844"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb20"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the original model, by calculating: "</span>, <span class="fu">get_logLik</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.o, <span class="fu">coef</span>(fit.o)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the original model, by calculating: -668.923871748844"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co"># --- centered model ---</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the centered model, by extracting: "</span>, <span class="fu">logLik</span>(fit.c))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the centered model, by extracting: -668.923871748842"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb24"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the centered model, by calculating: "</span>, <span class="fu">get_logLik</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c, <span class="fu">coef</span>(fit.c)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the centered model, by calculating: -668.923871748842"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb26"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co"># --- centered model with adjusted intercept ---</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the centered model with adjusted intercept: "</span>, <span class="fu">get_logLik</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c<span class="fl">.2</span>, <span class="fu">coef</span>(fit.c<span class="fl">.2</span>)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the centered model with adjusted intercept: -668.966665209023"</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb28"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co"># AUC</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>roc.o <span class="ot">&lt;-</span> <span class="fu">roc</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.o, <span class="at">levels=</span><span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>), <span class="at">na.rm=</span><span class="cn">TRUE</span>, <span class="at">ci=</span><span class="cn">TRUE</span>) </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Setting direction: controls &lt; cases</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb30"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"AUC of the original model: "</span>, roc.o<span class="sc">$</span>auc)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "AUC of the original model: 0.628656552649024"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb32"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>roc.c <span class="ot">&lt;-</span> <span class="fu">roc</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c, <span class="at">levels=</span><span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>), <span class="at">na.rm=</span><span class="cn">TRUE</span>, <span class="at">ci=</span><span class="cn">TRUE</span>) </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Setting direction: controls &lt; cases</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb34"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"AUC of the centered model: "</span>, roc.c<span class="sc">$</span>auc)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "AUC of the centered model: 0.628656552649024"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb36"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a>roc.c<span class="fl">.2</span> <span class="ot">&lt;-</span> <span class="fu">roc</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c<span class="fl">.2</span>, <span class="at">levels=</span><span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>), <span class="at">na.rm=</span><span class="cn">TRUE</span>, <span class="at">ci=</span><span class="cn">TRUE</span>) </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Setting direction: controls &lt; cases</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb38"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"AUC of the centered model with a different intercept: "</span>, roc.c<span class="fl">.2</span><span class="sc">$</span>auc)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "AUC of the centered model with a different intercept: 0.628656552649024"</code></pre>
+</div>
+</div>
+</section>
+<section id="one-continuous-variable-age" class="level1">
+<h1>One continuous variable: age</h1>
+<p>With one continuous variable, logit of the outcome mean and intercept of the centered algorithm are very close. Manually change the intercept will have even smaller effect on log likelihood and AUC.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb40"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>df <span class="ot">&lt;-</span> data <span class="sc">%&gt;%</span> <span class="fu">select</span>(age, target)</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a><span class="co"># -------- centering --------</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>vars_mean <span class="ot">&lt;-</span> <span class="fu">names</span>(df)</span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a><span class="co"># get mean values</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>means <span class="ot">&lt;-</span> <span class="fu">get_mean</span>(df, vars_mean)</span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a><span class="co"># centering vars</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>vars_center <span class="ot">&lt;-</span> <span class="fu">names</span>(means)</span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>df <span class="ot">&lt;-</span> <span class="fu">step_center</span>(df, vars_center, means)</span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb40-11"><a href="#cb40-11" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(df)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>  age target     age_C   target_C
+1  52      0 -2.434146 -0.5131707
+2  53      0 -1.434146 -0.5131707
+3  70      0 15.565854 -0.5131707
+4  61      0  6.565854 -0.5131707
+5  62      0  7.565854 -0.5131707
+6  58      1  3.565854  0.4868293</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb42"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="co"># fit the original model</span></span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a>fit.o <span class="ot">&lt;-</span> <span class="fu">glm</span>(target <span class="sc">~</span> age, <span class="at">data =</span> df, <span class="at">family =</span> <span class="st">"binomial"</span>)</span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a><span class="co"># fit the centered model</span></span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>fit.c <span class="ot">&lt;-</span> <span class="fu">glm</span>(target <span class="sc">~</span> age_C, <span class="at">data =</span> df, <span class="at">family =</span> <span class="st">"binomial"</span>)</span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a><span class="co"># outcome mean</span></span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a>y_mean <span class="ot">&lt;-</span> <span class="fu">mean</span>(df<span class="sc">$</span>target)</span>
+<span id="cb42-9"><a href="#cb42-9" aria-hidden="true" tabindex="-1"></a>y_mean_logit <span class="ot">&lt;-</span> <span class="fu">log</span>(y_mean<span class="sc">/</span>(<span class="dv">1</span><span class="sc">-</span>y_mean))</span>
+<span id="cb42-10"><a href="#cb42-10" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Mean outcome: "</span>, y_mean)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Mean outcome: 0.513170731707317"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb44"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Logit (log-odds) of the mean outcome: "</span>, y_mean_logit)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Logit (log-odds) of the mean outcome: 0.0526951169861911"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb46"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="co"># model coefficients</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="fu">cbind</span>(<span class="fu">coef</span>(fit.o), <span class="fu">coef</span>(fit.c))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                  [,1]        [,2]
+(Intercept)  2.9430034  0.05779796
+age         -0.0530036 -0.05300360</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb48"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="co"># centered model, with manually setting the intercept to the mean outcome</span></span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a>fit.c<span class="fl">.2</span> <span class="ot">&lt;-</span> fit.c</span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a>fit.c<span class="fl">.2</span><span class="sc">$</span>coefficients[<span class="dv">1</span>] <span class="ot">&lt;-</span> y_mean_logit</span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a><span class="co"># model coefficients</span></span>
+<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cbind</span>(<span class="fu">coef</span>(fit.o), <span class="fu">coef</span>(fit.c), <span class="fu">coef</span>(fit.c<span class="fl">.2</span>))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                  [,1]        [,2]        [,3]
+(Intercept)  2.9430034  0.05779796  0.05269512
+age         -0.0530036 -0.05300360 -0.05300360</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb50"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="co"># prediction: note `fit.o` and `fit.c` have the same predicted value, while `fit.c.2` has a different one</span></span>
+<span id="cb50-2"><a href="#cb50-2" aria-hidden="true" tabindex="-1"></a>df<span class="sc">$</span>pred.o <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit.o, <span class="at">newdata =</span> df, <span class="at">type =</span> <span class="st">"response"</span>)</span>
+<span id="cb50-3"><a href="#cb50-3" aria-hidden="true" tabindex="-1"></a>df<span class="sc">$</span>pred.c <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit.c, <span class="at">newdata =</span> df, <span class="at">type =</span> <span class="st">"response"</span>)</span>
+<span id="cb50-4"><a href="#cb50-4" aria-hidden="true" tabindex="-1"></a>df<span class="sc">$</span>pred.c<span class="fl">.2</span> <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit.c<span class="fl">.2</span>, <span class="at">newdata =</span> df, <span class="at">type =</span> <span class="st">"response"</span>)</span>
+<span id="cb50-5"><a href="#cb50-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb50-6"><a href="#cb50-6" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(df <span class="sc">%&gt;%</span> <span class="fu">select</span>(<span class="fu">contains</span>(<span class="st">"pred"</span>)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>     pred.o    pred.c  pred.c.2
+1 0.5465688 0.5465688 0.5453038
+2 0.5334034 0.5334034 0.5321332
+3 0.3170747 0.3170747 0.3159707
+4 0.4279510 0.4279510 0.4267023
+5 0.4150276 0.4150276 0.4137893
+6 0.4672457 0.4672457 0.4659757</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb52"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="co"># log likelihood</span></span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a><span class="co"># --- original model ---</span></span>
+<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the original model, by extracting: "</span>, <span class="fu">logLik</span>(fit.o))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the original model, by extracting: -682.532836184137"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb54"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the original model, by calculating: "</span>, <span class="fu">get_logLik</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.o, <span class="fu">coef</span>(fit.o)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the original model, by calculating: -682.532836184137"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb56"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="co"># --- centered model ---</span></span>
+<span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the centered model, by extracting: "</span>, <span class="fu">logLik</span>(fit.c))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the centered model, by extracting: -682.532836184137"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb58"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb58-1"><a href="#cb58-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the centered model, by calculating: "</span>, <span class="fu">get_logLik</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c, <span class="fu">coef</span>(fit.c)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the centered model, by calculating: -682.532836184137"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb60"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb60-1"><a href="#cb60-1" aria-hidden="true" tabindex="-1"></a><span class="co"># --- centered model with adjusted intercept ---</span></span>
+<span id="cb60-2"><a href="#cb60-2" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"Log likelihood of the centered model with adjusted intercept: "</span>, <span class="fu">get_logLik</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c<span class="fl">.2</span>, <span class="fu">coef</span>(fit.c<span class="fl">.2</span>)))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Log likelihood of the centered model with adjusted intercept: -682.535994716329"</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb62"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb62-1"><a href="#cb62-1" aria-hidden="true" tabindex="-1"></a><span class="co"># AUC</span></span>
+<span id="cb62-2"><a href="#cb62-2" aria-hidden="true" tabindex="-1"></a>roc.o <span class="ot">&lt;-</span> <span class="fu">roc</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.o, <span class="at">levels=</span><span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>), <span class="at">na.rm=</span><span class="cn">TRUE</span>, <span class="at">ci=</span><span class="cn">TRUE</span>) </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Setting direction: controls &lt; cases</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb64"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb64-1"><a href="#cb64-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"AUC of the original model: "</span>, roc.o<span class="sc">$</span>auc)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "AUC of the original model: 0.638707071938554"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb66"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb66-1"><a href="#cb66-1" aria-hidden="true" tabindex="-1"></a>roc.c <span class="ot">&lt;-</span> <span class="fu">roc</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c, <span class="at">levels=</span><span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>), <span class="at">na.rm=</span><span class="cn">TRUE</span>, <span class="at">ci=</span><span class="cn">TRUE</span>) </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Setting direction: controls &lt; cases</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb68"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb68-1"><a href="#cb68-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"AUC of the centered model: "</span>, roc.c<span class="sc">$</span>auc)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "AUC of the centered model: 0.638707071938554"</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb70"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb70-1"><a href="#cb70-1" aria-hidden="true" tabindex="-1"></a>roc.c<span class="fl">.2</span> <span class="ot">&lt;-</span> <span class="fu">roc</span>(df<span class="sc">$</span>target, df<span class="sc">$</span>pred.c<span class="fl">.2</span>, <span class="at">levels=</span><span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>), <span class="at">na.rm=</span><span class="cn">TRUE</span>, <span class="at">ci=</span><span class="cn">TRUE</span>) </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Setting direction: controls &lt; cases</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb72"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb72-1"><a href="#cb72-1" aria-hidden="true" tabindex="-1"></a><span class="fu">paste0</span>(<span class="st">"AUC of the centered model with a different intercept: "</span>, roc.c<span class="fl">.2</span><span class="sc">$</span>auc)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "AUC of the centered model with a different intercept: 0.638707071938554"</code></pre>
+</div>
+</div>
+<section id="some-calibration-plots-on-the-test-dataset" class="level2">
+<h2 class="anchored" data-anchor-id="some-calibration-plots-on-the-test-dataset">Some calibration plots on the test dataset</h2>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb74"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb74-1"><a href="#cb74-1" aria-hidden="true" tabindex="-1"></a><span class="co"># ---------- Overall calibration ----------</span></span>
+<span id="cb74-2"><a href="#cb74-2" aria-hidden="true" tabindex="-1"></a><span class="co"># The original model </span></span>
+<span id="cb74-3"><a href="#cb74-3" aria-hidden="true" tabindex="-1"></a>res <span class="ot">&lt;-</span> <span class="fu">calibration</span>(df<span class="sc">$</span>pred.o, df<span class="sc">$</span>target, <span class="at">marginPlt =</span> <span class="cn">TRUE</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in plot.window(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in plot.xy(xy, type, ...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in axis(side = side, at = at, labels = labels, ...): "marginPlt" is not
+a graphical parameter
+Warning in axis(side = side, at = at, labels = labels, ...): "marginPlt" is not
+a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in box(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in title(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="2.1-logistic_regression_simulated_data_files/figure-html/unnamed-chunk-11-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb80"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb80-1"><a href="#cb80-1" aria-hidden="true" tabindex="-1"></a>res</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Call:
+CalibrationCurves::val.prob.ci.2(p = prediction, y = outcome, 
+    marginPlt = TRUE)
+
+A 95% confidence interval is given for the calibration intercept, calibration slope and c-statistic. 
+
+          Dxy       C (ROC)            R2             D      D:Chi-sq 
+ 2.774141e-01  6.387071e-01  6.989069e-02  5.285341e-02  5.517475e+01 
+          D:p             U      U:Chi-sq           U:p             Q 
+ 1.102451e-13 -1.951220e-03  6.366463e-12  1.000000e+00  5.480463e-02 
+        Brier     Intercept         Slope          Emax  Brier scaled 
+ 2.364557e-01  7.276680e-14  1.000000e+00  1.078027e-13  5.352043e-02 
+         Eavg           ECI 
+ 7.620147e-02  9.930466e-01 </code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb82"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb82-1"><a href="#cb82-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The centered model </span></span>
+<span id="cb82-2"><a href="#cb82-2" aria-hidden="true" tabindex="-1"></a>res <span class="ot">&lt;-</span> <span class="fu">calibration</span>(df<span class="sc">$</span>pred.c, df<span class="sc">$</span>target, <span class="at">marginPlt =</span> <span class="cn">TRUE</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in plot.window(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in plot.xy(xy, type, ...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in axis(side = side, at = at, labels = labels, ...): "marginPlt" is not
+a graphical parameter
+Warning in axis(side = side, at = at, labels = labels, ...): "marginPlt" is not
+a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in box(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in title(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="2.1-logistic_regression_simulated_data_files/figure-html/unnamed-chunk-11-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb88"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb88-1"><a href="#cb88-1" aria-hidden="true" tabindex="-1"></a>res</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Call:
+CalibrationCurves::val.prob.ci.2(p = prediction, y = outcome, 
+    marginPlt = TRUE)
+
+A 95% confidence interval is given for the calibration intercept, calibration slope and c-statistic. 
+
+          Dxy       C (ROC)            R2             D      D:Chi-sq 
+ 2.774141e-01  6.387071e-01  6.989069e-02  5.285341e-02  5.517475e+01 
+          D:p             U      U:Chi-sq           U:p             Q 
+ 1.102451e-13 -1.951220e-03  6.366463e-12  1.000000e+00  5.480463e-02 
+        Brier     Intercept         Slope          Emax  Brier scaled 
+ 2.364557e-01  7.117779e-14  1.000000e+00  1.071365e-13  5.352043e-02 
+         Eavg           ECI 
+ 7.620147e-02  9.930466e-01 </code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb90"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb90-1"><a href="#cb90-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The centered model, with manually setting the intercept to the mean outcome</span></span>
+<span id="cb90-2"><a href="#cb90-2" aria-hidden="true" tabindex="-1"></a>res <span class="ot">&lt;-</span> <span class="fu">calibration</span>(df<span class="sc">$</span>pred.c<span class="fl">.2</span>, df<span class="sc">$</span>target, <span class="at">marginPlt =</span> <span class="cn">TRUE</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in plot.window(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in plot.xy(xy, type, ...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in axis(side = side, at = at, labels = labels, ...): "marginPlt" is not
+a graphical parameter
+Warning in axis(side = side, at = at, labels = labels, ...): "marginPlt" is not
+a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in box(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in title(...): "marginPlt" is not a graphical parameter</code></pre>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="2.1-logistic_regression_simulated_data_files/figure-html/unnamed-chunk-11-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb96"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb96-1"><a href="#cb96-1" aria-hidden="true" tabindex="-1"></a>res</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Call:
+CalibrationCurves::val.prob.ci.2(p = prediction, y = outcome, 
+    marginPlt = TRUE)
+
+A 95% confidence interval is given for the calibration intercept, calibration slope and c-statistic. 
+
+          Dxy       C (ROC)            R2             D      D:Chi-sq 
+ 2.774141e-01  6.387071e-01  6.989069e-02  5.285341e-02  5.517475e+01 
+          D:p             U      U:Chi-sq           U:p             Q 
+ 1.102451e-13 -1.945057e-03  6.317064e-03  9.968465e-01  5.479847e-02 
+        Brier     Intercept         Slope          Emax  Brier scaled 
+ 2.364489e-01  5.102839e-03  1.000000e+00  1.275709e-03  5.354768e-02 
+         Eavg           ECI 
+ 7.637083e-02  9.929849e-01 </code></pre>
+</div>
+</div>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
