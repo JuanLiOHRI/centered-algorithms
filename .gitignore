@@ -2,3 +2,9 @@
 /.Rhistory
 /Centered_algprithm_examples.html
 /Centered_algprithm_examples_files
+
+# Ignore all files with a certain extension
+    *.html
+
+# Ignore a directory and its contents
+    doc/

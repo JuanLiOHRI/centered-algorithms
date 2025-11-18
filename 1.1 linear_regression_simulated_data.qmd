@@ -1,7 +1,7 @@
 ---
-title: "Centered algorithm with simulated data, with interaction"
+title: "Centered algorithm with simulated data: Linear Regression"
 author: "Juan Li"
-date: 2025-08-13
+date: 2025-11-17
 format: 
   html:
     toc: true
@@ -16,12 +16,13 @@ editor: visual
 #| output: false
 
 library(dplyr) # Data manipulation
+library(tidyr) # Data manipulation
 library(ggplot2) # Data visualization
 library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
 
-source("R/util.R") 
+source("R/util.R")
 # functions in "util.R"
 # get_rcs: implement the formula of rcs components
 # step_dummy: dummy variables
@@ -31,6 +32,32 @@ source("R/util.R")
 # get_mean: get mean values from the original dataset
 # root.search: Root searching, not in use in this .qmd file
 ```
+
+# Introduction
+
+This file shows an empirical example of centered algorithm of *Linear Regression* using simulated data. Note, for simplicity, this repo focuses on examples, for theory in math, please go to the `\doc` folder.
+
+In this example, we will show different variable types:
+
+-   Categorical (cat) variable
+
+-   Continuous (cont) variable as it is.
+
+-   Continuous variable with restricted cubic spline (rcs).
+
+-   Interaction terms:
+
+    -   cat \* cat
+
+    -   cat \* cont
+
+    -   cont \* cont
+
+    -   cat \* rcs
+
+    -   cont \* rcs
+
+    -   rcs \* rcs
 
 # Simulate data for this tutorial
 
@@ -68,6 +95,8 @@ And we assume the outcome `y` is a linear combination of the predictors with som
 
 -   Interaction of two continuous variables (with rcs): `x4`, `x6`
 
+## Create the predictors
+
 ```{r}
 n <- 1000
 seed <- 567
@@ -86,15 +115,48 @@ data <- data.frame(
     replace = TRUE,
     prob = c(0.1, 0.4, 0.5)
   ),
-  x3 = rnorm(n, mean = 100, sd = 38),
-  x4 = rnorm(n, mean = 50, sd = 15),
-  x5 = rnorm(n, mean = 30, sd = 5),
-  x6 = rnorm(n, mean = 15, sd = 3),
+  x3 = rnorm(n, mean = 100, sd = 38), # normal distribution
+  x4 = rnorm(n, mean = 50, sd = 15), # normal distribution
+  x5 = runif(n, min = 0, max = 200), # uniform distribution
+  x6 = skewed(n, 15, 150, 6, 2, seed), # skewed distribution
   error = rnorm(n, mean = 0, sd = 3)
 )
-table(data$x1)
-table(data$x2)
+```
 
+## Take a look at all the variables, including `error`
+
+```{r}
+# categorial variables
+data_cat <- pivot_longer(
+  data,
+  cols = c("x1", "x2"),
+  names_to = "var",
+  values_to = "value"
+)
+ggplot(data_cat, aes(value)) +
+  geom_bar()+
+  facet_wrap(~var)+
+  labs(title = "Categorical variables")
+
+# continuous variables
+data_cont <- pivot_longer(
+  data,
+  cols = c("x3", "x4", "x5", "x6", "error"),
+  names_to = "var",
+  values_to = "value"
+)
+data_cont$var <- factor(data_cont$var, levels = c("x3", "x4", "x5", "x6", "error"))
+ggplot(data_cont, aes(value)) +
+  geom_density()+
+  facet_wrap(~var, scales = "free")+
+  labs(title = "Continuous variables")
+```
+
+## Process the data
+
+Including creating dummy variables, rcs terms, and interaction terms; and create `y` with pre-determined formula. For details of all the `step_` functions, see `util.R`.
+
+```{r}
 # -------- dummy variables --------
 vars_cat <- c("x1", "x2")
 data <- step_dummy(data, vars_cat)
@@ -115,6 +177,7 @@ knots_list <- setNames(knots_list, vars_rcs)
 data <- step_rcs(data, vars_rcs, knots_list)
 
 # outcome
+# Note: I skip the interaction term between two variables with rcs. It's fine for this example.
 data <- data %>%
   mutate(x3_x5_interaction = x3 * x5) %>%
   mutate(
@@ -163,17 +226,194 @@ data <- data %>%
 head(data)
 ```
 
-# Interaction of two categorical variables: `x1`, `x2`
+# One predictor
 
--   There is an older version talking about direct centering and conditional centering, for details, see the .qmd file with the same name in the "backup" folder.
+From the output below, two things to check:
+
+1.  The coefficients of the predictor remains the same after centering.
+
+2.  After centering, the intercept is equal to outcome mean.
+
+## Centered algorithm with a *dichotomous* predictor
+
+```{r}
+#| warning: false
+#| message: false
+
+# centering
+data <- data %>%
+  mutate(x1_cat2_C = x1_cat2 - mean(data$x1_cat2))
+
+# --- Original: linear regression model on `x1` ---
+fit <- lm(y ~ x1, data = data)
+coef(fit)
+
+# --- Centered: linear regression model on centered variable `x1_cat2_C` ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x1_cat2_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm with a *categorical* predictor
+
+```{r}
+#| warning: false
+#| message: false
+
+# centering
+data <- data %>%
+  mutate(
+    x2_cat2_C = x2_cat2 - mean(data$x2_cat2),
+    x2_cat3_C = x2_cat3 - mean(data$x2_cat3)
+  )
+
+# --- Original: linear regression model on `x2` ---"
+fit <- lm(y ~ x2, data = data)
+coef(fit)
+
+# --- Original: linear regression model on `x2_cat2 + x2_cat3` ---"
+# confirm that the results are the same as above
+fit <- lm(y ~ x2_cat2 + x2_cat3, data = data)
+coef(fit)
+
+# --- Centered: linear regression model on centered variable `x2_cat2_C + x2_cat3_C` ---"
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x2_cat2_C + x2_cat3_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm with a *continuous* predictor as it is
+
+```{r}
+#| warning: false
+#| message: false
+
+# centering
+data <- data %>%
+  mutate(x3_C = x3 - mean(data$x3))
+
+# --- Original: linear regression model on `x3` ---
+fit <- lm(y ~ x3, data = data)
+coef(fit)
+
+# --- Centered: linear regression model on centered variable `x3_C` ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x3_C, data = data)
+coef(fit)
+```
+
+## Centered algorithm with a *continuous* predictor using *restricted cubic spline (rcs)*
+
+**Note:** this is a newer version where treat rcs as (k-1) independent variables. For the original idea that to find the root as the offest instead of `x_mean`, please see `/backup/1.1 simulated_data_no_interaction.qmd`.
+
+The linear regression with a *rcs* with $k$ knots can be written as $y=\beta_0+\sum_{j=1}^{k-1}{\beta_{rcs_j}x_{rcs_j}}$.
+
+### Components of rcs
+
+Below we use `rms::rcs`, for more information, like the default knot locations, see `?Hmisc::rcspline.eval`.
+
+Equations for restricted cubic spline with $j = 1,...,k$ knots:
+
+$x_{rcs_1} = x,\ j=1$
+
+$x_{rcs_{j}} = {(\frac{x-knot_{j-1}}{(knot_k-knot_1)^{\frac{2}{3}}})}_+^{3} + \frac{(knot_{k-1}-knot_{j-1}){(\frac{x-knot_k}{(knot_k-knot_1)^{\frac{2}{3}}})}_+^{3}- (knot_k-knot_{j-1}){(\frac{x-knot_{k-1}}{(knot_k-knot_1)^{\frac{2}{3}}})}_+^{3}}{knot_k-knot_{k-1}},\ j=2,...,k-1$
+
+where:
+
+$$
+(x - knot)_+ = 
+\begin{cases}
+x - knot&,\ x - knot>0 \\
+0&, \ x - knot\le0
+\end{cases}
+$$
+
+In the example below, we use $k = 4$:
+
+```{r}
+#| message: false
+
+# check above formula
+rcs.fit <- rcs(data$x4, k_x4)
+knots <- attributes(rcs.fit)$parms # knot locations
+res <- labelled::remove_attributes(
+  rcs.fit,
+  names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
+) # don't print the attributes
+print(head(res))
+
+# to confirm the function works as expected
+res <- get_rcs(data$x4, knots)
+print(head(res))
+```
+
+### Centered algorithm using *rcs*
+
+In this scenario, we have two methods, which basically is the order of operations:
+
+1. __Method 1__: Centering the vatiable `x_4` first, then get the rcs terms of the new centered vatiable.
+
+2. __Method 2__: Get the rcs terms of the orginial `x_4` first, then centering each rcs term.
+
+I'll use below example to show that __Method 2__ is preferred.
+
+```{r}
+# --- Original: linear regression model on `rcs(x4,k_x4)` ---
+fit <- lm(y ~ rcs(x4,k_x4), data = data)
+coef(fit)
+```
+
+#### __Method 1__: centering first, then rcs
+
+```{r}
+data <- data %>%
+  mutate(x4_C = x4 - mean(data$x4))
+
+# --- Centered: linear regression model on centered variable `rcs(x4_C,k_x4)` ---
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ rcs(x4_C, k_x4), data = data)
+coef(fit)
+
+# prediction using the centered algorithm when x = 0
+predict(fit, newdata = data.frame(x4_C = 0))
+```
+
+#### __Method 2__: rcs first, then centering
+
+```{r}
+# --- Original: linear regression model on the original variable 'rcs(x4,k_x4)', but with rcs terms ---
+# confirm if it's the same as the original model above
+fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3, data = data)
+coef(fit)
+
+# centering the rcs terms instead of x4
+data <- data %>%
+  mutate(
+    x4_rcs_1_C = x4_rcs_1 - mean(data$x4_rcs_1),
+    x4_rcs_2_C = x4_rcs_2 - mean(data$x4_rcs_2),
+    x4_rcs_3_C = x4_rcs_3 - mean(data$x4_rcs_3)
+  )
+
+# --- Centered: linear regression model on centered rcs terms "x4_rcs_1_C", "x4_rcs_2_C", "x4_rcs_3_C" ---
+# confirm if it's the same as above
+paste0("Mean outcome in the dataset: ", mean(data$y))
+fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C, data = data)
+coef(fit)
+```
+
+# Interaction terms
+
+-   There is an older version talking about direct centering and conditional centering, for details, see `/backup/1.2 simulated_data_wt_interaction.qmd'.
 
     -   Note: with conditional centering, other coefficients except for intercept (which is equal to $\overline{y}$) are affected.
 
--   Here, the idea is to unpack the interaction and add the interaction terms, then do centering on all terms.
+-   Here, the idea is treat the interaction term(s) as independent, and centering on each of them:
 
     -   intercept == $\overline{y}$ is achieved
 
     -   the rest coefficients stay the same as in the original model
+
+## Interaction of two categorical variables: `x1`, `x2`
 
 ```{r}
 #| warning: false
@@ -186,7 +426,7 @@ data <- data %>%
     x1_cat2_by_x2_cat3 = x1_cat2 * x2_cat3
   )
 
-# -------- centering each term --------
+# -------- centering on each term --------
 data <- data %>%
   mutate(
     x1_cat2_C = x1_cat2 - mean(data$x1_cat2),
@@ -196,32 +436,22 @@ data <- data %>%
     x1_cat2_by_x2_cat3_C = x1_cat2_by_x2_cat3 - mean(data$x1_cat2_by_x2_cat3)
   )
 
-# --- linear regression model on original variables ---
+# --- Original: linear regression model on original variables ---
 fit <- lm(y ~ x1 * x2, data = data)
 coef(fit)
 
-# --- linear regression model on original variables, but unpacked ---
+# --- Original: linear regression model on original variables, but unpacked ---
 # to confirm it's the same as above
 fit <- lm(y ~ x1_cat2 + x2_cat2 + x2_cat3 + x1_cat2_by_x2_cat2 + x1_cat2_by_x2_cat3, data = data)
 coef(fit)
 
-# --- linear regression model on centered variables ---"
+# --- Centered: linear regression model on centered variables ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x1_cat2_by_x2_cat2_C + x1_cat2_by_x2_cat3_C, data = data)
 coef(fit)
 ```
 
 # Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
-
--   There is an older version talking about direct centering and conditional centering, for details, see the .qmd file with the same name in the "backup" folder.
-
-    -   Note: with conditional centering, other coefficients except for intercept (which is equal to $\overline{y}$) are affected.
-
--   Here, the idea is to unpack the interaction and add the interaction terms, then do centering on all terms.
-
-    -   intercept == $\overline{y}$ is achieved
-
-    -   the rest coefficients stay the same as in the original model
 
 ```{r}
 #| warning: false
@@ -242,16 +472,16 @@ data <- data %>%
     x2_cat3_by_x3_C = x2_cat3_by_x3 - mean(data$x2_cat3_by_x3)
   )
 
-# --- linear regression model on original variables ---
+# --- Original: linear regression model on original variables ---
 fit <- lm(y ~ x2 * x3, data = data)
 coef(fit)
 
-# --- linear regression model on original variables, but unpacked ---
+# --- Original: linear regression model on original variables, but unpacked ---
 # to confirm it's the same as above
 fit <- lm(y ~ x2_cat2 + x2_cat3 + x3 + x2_cat2_by_x3 + x2_cat3_by_x3, data = data)
 coef(fit)
 
-# --- linear regression model on centered variables ---"
+# --- Centered: linear regression model on centered variables ---"
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x2_cat2_C + x2_cat3_C + x3_C + x2_cat2_by_x3_C + x2_cat3_by_x3_C, data = data)
 coef(fit)
@@ -276,16 +506,16 @@ data <- data %>%
     x3_by_x5_C = x3_by_x5 - mean(data$x3_by_x5)
   )
 
-# --- linear regression model on original variables ---
+# --- Original: linear regression model on original variables ---
 fit <- lm(y ~ x3 * x5, data = data)
 coef(fit)
 
-# --- linear regression model on original variables, but unpacked ---
+# --- Original: linear regression model on original variables, but unpacked ---
 # to confirm it's the same as above
 fit <- lm(y ~ x3 + x5 + x3_by_x5, data = data)
 coef(fit)
 
-# --- linear regression model on centered variables ---
+# --- Centered: linear regression model on centered variables ---
 # to confirm it's the same as above
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x3_C + x5_C + x3_by_x5_C, data = data)
@@ -320,11 +550,11 @@ data <- data %>%
     x2_cat3_by_x4_rcs_3_C = x2_cat3_by_x4_rcs_3 - mean(data$x2_cat3_by_x4_rcs_3)
   )
   
-# --- linear regression model on original variables ---
+# --- Original: linear regression model on original variables ---
 fit <- lm(y ~ x2 * rcs(x4, k_x4), data = data)
 coef(fit)
 
-# --- linear regression model on original variables, but unpacked ---
+# --- Original: linear regression model on original variables, but unpacked ---
 # to confirm it's the same as above
 fit <- lm(y ~ x2_cat2 + x2_cat3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + 
               x2_cat2_by_x4_rcs_1 + 
@@ -335,7 +565,7 @@ fit <- lm(y ~ x2_cat2 + x2_cat3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3 +
               x2_cat3_by_x4_rcs_3, data = data)
 coef(fit)
 
-# --- linear regression model on centered variables ---
+# --- Centered: linear regression model on centered variables ---
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x2_cat2_C + x2_cat3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + 
               x2_cat2_by_x4_rcs_1_C + 
@@ -366,16 +596,16 @@ data <- data %>%
     x3_by_x4_rcs_3_C = x3_by_x4_rcs_3 - mean(data$x3_by_x4_rcs_3)
   )
 
-# --- linear regression model on original variables ---
+# --- Original: linear regression model on original variables ---
 fit <- lm(y ~ x3 * rcs(x4, k_x4), data = data)
 coef(fit)
 
-# --- linear regression model on original variables, but unpacked ---
+# --- Original: linear regression model on original variables, but unpacked ---
 # to confirm it's the same as above
 fit <- lm(y ~ x3 + x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x3_by_x4_rcs_1 + x3_by_x4_rcs_2 + x3_by_x4_rcs_3, data = data)
 coef(fit)
 
-# --- linear regression model on centered variables ---
+# --- Centered: linear regression model on centered variables ---
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x3_by_x4_rcs_1_C + x3_by_x4_rcs_2_C + x3_by_x4_rcs_3_C, data = data)
 coef(fit)
@@ -408,11 +638,11 @@ data <- data %>%
     x4_rcs_3_by_x6_rcs_2_C = x4_rcs_3_by_x6_rcs_2 - mean(data$x4_rcs_3_by_x6_rcs_2)
   )
 
-# --- linear regression model on original variables ---
+# --- Original: linear regression model on original variables ---
 fit <- lm(y ~ rcs(x4, k_x4) * rcs(x6, k_x6), data = data)
 coef(fit)
 
-# --- linear regression model on original variables, but unpacked ---
+# --- Original: linear regression model on original variables, but unpacked ---
 # to confirm it's the same as above
 fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x6_rcs_1 + x6_rcs_2 +
   x4_rcs_1_by_x6_rcs_1 +
@@ -423,7 +653,7 @@ fit <- lm(y ~ x4_rcs_1 + x4_rcs_2 + x4_rcs_3 + x6_rcs_1 + x6_rcs_2 +
   x4_rcs_3_by_x6_rcs_2, data = data)
 coef(fit)
 
-# --- linear regression model on centered variables ---
+# --- Centered: linear regression model on centered variables ---
 paste0("Mean outcome in the dataset: ", mean(data$y))
 fit <- lm(y ~ x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x6_rcs_1_C + x6_rcs_2_C +
   x4_rcs_1_by_x6_rcs_1_C +
@@ -509,78 +739,8 @@ fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2
                 x4_rcs_2_by_x6_rcs_2_C +
                 x4_rcs_3_by_x6_rcs_2_C, data = data)
 coef(fit.c)
-```
 
-```{r}
-# checking when only know value of one variable
-df <- data.frame(
-  x1 = c("cat1", "cat2", rep(NA, 7)), 
-  x2 = c(NA, NA, "cat1", "cat2", "cat3", rep(NA, 4)),
-  x3 = c(rep(NA,5), 90, rep(NA,3)),
-  x4 = c(rep(NA,6), 50, rep(NA,2)),
-  x5 = c(rep(NA,7), 30, NA),
-  x6 = c(rep(NA,8), 15)
-)
-
-# -------- dummy variables --------
-vars_cat <- c("x1", "x2")
-df <- step_dummy(df, vars_cat)
-
-# -------- rcs --------
-# x4
-k_x4 <- 4
-rcs.fit <- rcs(data$x4, k_x4)
-knots_x4 <- attributes(rcs.fit)$parms # knot locations
-# x6
-k_x6 <- 3
-rcs.fit <- rcs(data$x6, k_x6)
-knots_x6 <- attributes(rcs.fit)$parms # knot locations
-# unpack rcs
-vars_rcs <- c("x4", "x6")
-knots_list <- list(knots_x4, knots_x6)
-knots_list <- setNames(knots_list, vars_rcs)
-df <- step_rcs(df, vars_rcs, knots_list)
-
-# -------- interaction terms --------
-interaction_list <- list(
-  c("x1", "x2"),
-  c("x2", "x3"),
-  c("x3", "x5"),
-  c("x2", "x4"),
-  c("x3", "x4"),
-  c("x4", "x6")
-)
-df <- step_interaction(df, interaction_list)
-
-# -------- centering --------
-vars_mean <- names(df)
-# get mean values from the ORIGINAL dataset
-means <- get_mean(data, vars_mean)
-# centering vars in the df dataset
-vars_center <- names(means)
-df <- step_center(df, vars_center, means)
-
-# -------- replace NAs using 0 -------------
-for (var_C in paste0(vars_center, "_C")) {
-  df[[var_C]] <- ifelse(is.na(df[[var_C]]), 0, df[[var_C]])
-}
-
-# -------- prediction --------
-# predicted values using the centered model
-df$pred.c <- predict(fit.c, newdata = df)
-
-vec <- rep(0, nrow(df))
-vec[1] <- mean(data$y[data$x1 == "cat1"])
-vec[2] <- mean(data$y[data$x2 == "cat2"])
-vec[3] <- mean(data$y[data$x2 == "cat1"])
-vec[4] <- mean(data$y[data$x2 == "cat2"])
-vec[5] <- mean(data$y[data$x2 == "cat3"])
-vec[6] <- mean(data$y[data$x3 == 90])
-vec[7] <- mean(data$y[data$x4 == 50])
-vec[8] <- mean(data$y[data$x5 == 30])
-vec[9] <- mean(data$y[data$x6 == 15])
-
-cbind(vec, df$pred.c)
+cbind(coef(fit.o), coef(fit.c))
 ```
 
 ## test
@@ -597,14 +757,6 @@ vars_cat <- c("x1", "x2")
 test <- step_dummy(test, vars_cat)
 
 # -------- rcs --------
-# x4
-k_x4 <- 4
-rcs.fit <- rcs(data$x4, k_x4)
-knots_x4 <- attributes(rcs.fit)$parms # knot locations
-# x6
-k_x6 <- 3
-rcs.fit <- rcs(data$x6, k_x6)
-knots_x6 <- attributes(rcs.fit)$parms # knot locations
 # unpack rcs
 vars_rcs <- c("x4", "x6")
 knots_list <- list(knots_x4, knots_x6)
@@ -638,8 +790,7 @@ test$pred.o <- predict(fit.o, newdata = test)
 test$pred.c <- predict(fit.c, newdata = test)
 
 # compare the predicted values
-test$pred.o == test$pred.c
-test$pred.o - test$pred.c
+head(cbind(test$pred.o, test$pred.c), 20)
 ```
 
 ```{r}

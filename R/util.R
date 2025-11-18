@@ -1,4 +1,21 @@
 require("dplyr")
+
+# generate random data with a skewed distribution
+skewed <- function(n, min, max, alpha, beta, seed) {
+  # alpha < beta for positive skew (tail to the right)
+  # alpha > beta for negative skew (tail to the left)
+
+  set.seed(seed)
+  # Generate a random number from a beta distribution
+  # The 'rbeta' function generates values between 0 and 1
+  beta_sample <- rbeta(n, alpha, beta)
+
+  # Scale the beta sample to the desired range
+  skewed_random_number <- min + beta_sample * (max - min)
+
+  return(skewed_random_number)
+}
+
 # implement the formula of rcs components
 get_rcs <- function(x, knots) {
   k <- length(knots)

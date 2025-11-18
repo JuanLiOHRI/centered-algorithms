@@ -21,7 +21,7 @@ library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
 library(rms)
 
-source("R/util.rcs.R")
+source("backup/util.rcs.R")
 ```
 
 # Simulate data for this tutorial
@@ -397,7 +397,7 @@ res <- labelled::remove_attributes(
 ) # don't print the attributes
 print(head(res))
 
-source("R/util.rcs.R", echo = TRUE)
+source("backup/util.rcs.R", echo = TRUE)
 res <- get_rcs(data$x4, knots)
 print(head(res))
 ```

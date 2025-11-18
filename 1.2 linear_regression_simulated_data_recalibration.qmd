@@ -1,0 +1,447 @@
+---
+title: "Centered algorithm with simulated data: Linear Regression, re-calibration"
+author: "Juan Li"
+date: 2025-11-17
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(fastDummies) # make dummy variables
+library(rms)
+
+source("R/util.R") 
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+# Simulate data for this tutorial
+
+Same as in `1.1 linear_regression_simulated_data.qmd`.
+
+## Create the predictors in the **development** dataset
+
+```{r}
+n <- 1000
+seed <- 567
+
+set.seed(seed)
+data.dev <- data.frame(
+  x1 = sample(
+    c("cat1", "cat2"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.5, 0.5)
+  ),
+  x2 = sample(
+    c("cat1", "cat2", "cat3"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.1, 0.4, 0.5)
+  ),
+  x3 = rnorm(n, mean = 100, sd = 38), # normal distribution
+  x4 = rnorm(n, mean = 50, sd = 15), # normal distribution
+  x5 = runif(n, min = 0, max = 200), # uniform distribution
+  x6 = skewed(n, 15, 150, 6, 2, seed), # skewed distribution
+  error = rnorm(n, mean = 0, sd = 3)
+)
+```
+
+## Create the predictors in the **external** dataset
+
+Both distribution and summary stats can be different. For simplicity, I'll change ratios of `x1` and `x2`, and switch `x3`to `x6`.
+
+```{r}
+n <- 500
+seed <- 567
+
+set.seed(seed)
+data.ext <- data.frame(
+  x1 = sample(
+    c("cat1", "cat2"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.3, 0.7)
+  ),
+  x2 = sample(
+    c("cat1", "cat2", "cat3"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.3, 0.3, 0.4)
+  ),
+  x3 = runif(n, min = 0, max = 200), # `x5` in development dataset
+  x4 = skewed(n, 15, 150, 6, 2, seed), # `x6` in development dataset 
+  x5 = rnorm(n, mean = 50, sd = 15), # `x4` in development dataset 
+  x6 = rnorm(n, mean = 100, sd = 38), # `x3` in development dataset 
+  error = rnorm(n, mean = 0, sd = 3)
+)
+```
+
+## Visualize the two datasets
+
+```{r}
+dataPlt <- bind_rows(
+  data.dev %>% mutate(type = "development"),
+  data.ext %>% mutate(type = "external")
+)
+
+# categorial variables
+data_cat <- pivot_longer(
+  dataPlt,
+  cols = c("x1", "x2"),
+  names_to = "var",
+  values_to = "value"
+)
+ggplot(data_cat, aes(value)) +
+  geom_bar() +
+  facet_grid(cols = vars(type), rows = vars(var), scales = "free") +
+  labs(title = "Categorical variables")
+
+# continuous variables
+data_cont <- pivot_longer(
+  dataPlt,
+  cols = c("x3", "x4", "x5", "x6", "error"),
+  names_to = "var",
+  values_to = "value"
+)
+data_cont$var <- factor(
+  data_cont$var,
+  levels = c("x3", "x4", "x5", "x6", "error")
+)
+ggplot(data_cont, aes(value)) +
+  geom_density() +
+  facet_grid(cols = vars(type), rows = vars(var), scales = "free") +
+  labs(title = "Continuous variables")
+```
+
+## Process the **development** dataset
+
+Follow below orders:
+
+1.  creating dummy variables;
+
+2.  creating rcs terms;
+
+3.  creating interaction terms.
+
+```{r}
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data.dev <- step_dummy(data.dev, vars_cat)
+
+# -------- rcs --------
+# x4
+k_x4 <- 4
+rcs.fit <- rcs(data.dev$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data.dev$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data.dev <- step_rcs(data.dev, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+data.dev <- step_interaction(data.dev, interaction_list)
+names(data.dev)
+```
+
+## Process the **external** dataset
+
+Follow the same orders, with some **Note**:
+
+1.  creating dummy variables;
+
+2.  creating rcs terms: **using knot locations from the DEVELOPMENT datasets**;
+
+3.  creating interaction terms.
+
+```{r}
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data.ext <- step_dummy(data.ext, vars_cat)
+
+# -------- rcs --------
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data.ext <- step_rcs(data.ext, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+data.ext <- step_interaction(data.ext, interaction_list)
+names(data.ext)
+```
+
+## Outcome
+
+```{r}
+data <- bind_rows(
+  data.dev %>% mutate(type = "development"),
+  data.ext %>% mutate(type = "external")
+)
+
+# outcome
+# Note: I skip the interaction term between two variables with rcs. It's fine for this example.
+data <- data %>%
+  mutate(
+    y = case_when(
+      x2 == "cat1" ~ 100 +
+      3 * x1_cat2 +
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      10 * x3 +
+      25 * x4_rcs_1 +
+      18 * x4_rcs_2 +
+      21 * x4_rcs_3 -
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_by_x5 +
+      error,
+    x2 == "cat2" ~ 100 +
+      5 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      21 * x3 +        # change based on value of x2
+      8 * x4_rcs_1 +  # change based on value of x2
+      36 * x4_rcs_2 +  # change based on value of x2
+      14 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_by_x5 +
+      error,
+    x2 == "cat3" ~ 100 +
+      7 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      5 * x3 +         # change based on value of x2
+      2.5 * x4_rcs_1 + # change based on value of x2
+      40 * x4_rcs_2 +  # change based on value of x2
+      16 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_by_x5 +
+      error
+  ))
+
+data.dev <- data %>% filter(type == "development")
+data.ext <- data %>% filter(type == "external")
+```
+
+## Table 1 for the two datasets
+
+```{r}
+library(gtsummary)
+
+data %>% 
+  tbl_summary(by = "type") %>% 
+  modify_header(label = "**Variable**") %>% # update the column header
+  modify_caption("Table 1. Summary of the two datasets") %>%
+  bold_labels() %>% 
+  as_flex_table()
+
+data %>% 
+  tbl_summary(by = "type",statistic = list(all_continuous() ~ "{mean} ({sd})")) %>% 
+  modify_header(label = "**Variable**") %>% # update the column header
+  modify_caption("Table 1. Summary of the two datasets") %>%
+  bold_labels() %>% 
+  as_flex_table()
+```
+
+## Centering: the last step
+
+centering: for comparison, we'll create two versions of the EXTERNAL datasets:
+
+1.  `data.ext.d`: **using mean values from the DEVELOPMENT datasets**;
+
+2.  `data.ext.t`: **using mean values from the EXTERNAL datasets**.
+
+```{r}
+# -------- DEVELOPMENT --------
+vars_mean <- names(data.dev)
+# get mean values
+means.dev <- get_mean(data.dev, vars_mean)
+# centering vars in the data.dev dataset
+vars_center <- names(means.dev)
+data.dev <- step_center(data.dev, vars_center, means.dev)
+
+names(data.dev)
+
+# -------- EXTERNAL: `data.ext.d` --------
+data.ext.d <- step_center(data.ext, vars_center, means.dev) # means from the DEVELOPMENT dataset
+names(data.ext.d)
+
+# -------- EXTERNAL: `data.ext.t` --------
+vars_mean <- names(data.ext)
+# get mean values
+means.ext <- get_mean(data.ext, vars_mean)
+# centering vars in the data.ext dataset
+vars_center <- names(means.ext)
+data.ext.t <- step_center(data.ext, vars_center, means.ext) # means from the EXTERNAL dataset
+names(data.ext.t)
+```
+
+# Original and centered model on the development dataset
+
+```{r}
+# The original model
+
+options(scipen = 999)
+# original model
+fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4,k_x4) + x5 + rcs(x6,k_x6) + 
+              x1*x2 + x2*x3 + x3*x5 + x2*rcs(x4,k_x4) + x3*rcs(x4,k_x4) + rcs(x4,k_x4)*rcs(x6,k_x6), data = data.dev)
+```
+
+```{r}
+# The centered model on the development dataset
+paste0("Mean outcome in the dataset: ", mean(data.dev$y))
+fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C +
+                # interaction terms of x1 * x2
+                x1_cat2_by_x2_cat2_C + x1_cat2_by_x2_cat3_C +
+                # interaction terms of x2 * x3
+                x2_cat2_by_x3_C + x2_cat3_by_x3_C +
+                # interaction terms of x3 * x5
+                x3_by_x5_C +
+                # interaction terms of x2 * rcs(x4, k_x4)
+                x2_cat2_by_x4_rcs_1_C + 
+                x2_cat3_by_x4_rcs_1_C + 
+                x2_cat2_by_x4_rcs_2_C + 
+                x2_cat3_by_x4_rcs_2_C + 
+                x2_cat2_by_x4_rcs_3_C + 
+                x2_cat3_by_x4_rcs_3_C +
+                # interaction terms of x3 * rcs(x4, k_x4)
+                x3_by_x4_rcs_1_C + x3_by_x4_rcs_2_C + x3_by_x4_rcs_3_C +
+                # interaction terms of x4 * rcs(x6, k_x6)
+                x4_rcs_1_by_x6_rcs_1_C +
+                x4_rcs_2_by_x6_rcs_1_C +
+                x4_rcs_3_by_x6_rcs_1_C +
+                x4_rcs_1_by_x6_rcs_2_C +
+                x4_rcs_2_by_x6_rcs_2_C +
+                x4_rcs_3_by_x6_rcs_2_C, data = data.dev)
+
+cbind(coef(fit.o), coef(fit.c))
+```
+
+Confirm that the original model and the centered model have the same predicted values.
+
+```{r}
+# The original model
+data.dev$pred.o <- predict(fit.o, newdata = data.dev)
+
+# The centered model 
+data.dev$pred.c <- predict(fit.c, newdata = data.dev)
+
+head(cbind(data.dev$pred.o, data.dev$pred.c))
+```
+
+# Transport the model to the external dataset
+
+Here we have 5 models:
+
+1.  Model_1: The original model;
+
+2.  Model_2: The centered model: y = mean(y.dev) + sum\[beta_i\*(x_i - mean(x_i.dev))\];
+
+3.  Model_3: The centered model: y = mean(y.dev) + sum\[beta_i\*(x_i - mean(x_i.ext))\];
+
+4.  Model_4: The centered model: y = mean(y.ext) + sum\[beta_i\*(x_i - mean(x_i.dev))\];
+
+5.  Model_5: The centered model: y = mean(y.ext) + sum\[beta_i\*(x_i - mean(x_i.ext))\].
+
+From results below show that:
+
+-   Models 1 & 2 are the same (i.e., original model);
+
+-   Models 3 & 4 are NOT correct;
+
+-   **Model 5 is the re-calibrated model.**
+
+```{r}
+# Model 1
+pred.1 <- predict(fit.o, newdata = data.ext)
+
+# Model 2
+pred.2 <- predict(fit.c, newdata = data.ext.d)
+
+# Model 3
+pred.3 <- predict(fit.c, newdata = data.ext.t)
+
+# Update model intercept to the new outconme mean
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- mean(data.ext$y)
+
+# Model 4
+pred.4 <- predict(fit.c.2, newdata = data.ext.d)
+
+# Model 5
+pred.5 <- predict(fit.c.2, newdata = data.ext.t)
+
+head(cbind(data.ext$y, pred.1, pred.2, pred.3, pred.4, pred.5))
+```
+
+## Some calibration plots on the external dataset
+
+```{r}
+res <- calibration(pred.1, data.ext$y, labelPos.x = 2500, labelPos.y = 10000, marginPlt = TRUE)
+```
+
+```{r}
+res <- calibration(pred.2, data.ext$y, labelPos.x = 2500, labelPos.y = 10000, marginPlt = TRUE)
+```
+
+```{r}
+res <- calibration(pred.5, data.ext$y, labelPos.x = 2500, labelPos.y = 10000, marginPlt = TRUE)
+```
+
+```{r}
+res <- calibration(pred.3, data.ext$y, labelPos.x = 1000, labelPos.y = 10000, marginPlt = TRUE)
+```
+
+```{r}
+res <- calibration(pred.4, data.ext$y, labelPos.x = 1000, labelPos.y = 10000, marginPlt = TRUE)
+```
+
+```{r}
+
+```
