@@ -16,6 +16,7 @@ editor: visual
 #| output: false
 
 library(dplyr) # Data manipulation
+library(tidyr) # Data manipulation
 library(ggplot2) # Data visualization
 library(ggpubr) # ggarrange
 library(fastDummies) # make dummy variables
@@ -38,7 +39,7 @@ source("R/calibration.R") # for calibration plots
 
 Same as in `1.1 linear_regression_simulated_data.qmd`.
 
-## Create the predictors in the **development** dataset
+## Create predictors in the **development** dataset
 
 ```{r}
 n <- 1000
@@ -66,9 +67,9 @@ data.dev <- data.frame(
 )
 ```
 
-## Create the predictors in the **external** dataset
+## Create predictors in the **external** dataset
 
-Both distribution and summary stats can be different. For simplicity, I'll change ratios of `x1` and `x2`, and switch `x3`to `x6`.
+Both distribution and summary stats can be different. For simplicity, I'll change ratios of `x1` and `x2`, and shuffle `x3`to `x6`.
 
 ```{r}
 n <- 500
@@ -98,6 +99,8 @@ data.ext <- data.frame(
 
 ## Visualize the two datasets
 
+To show that the two datasets are sufficiently different.
+
 ```{r}
 dataPlt <- bind_rows(
   data.dev %>% mutate(type = "development"),
@@ -113,7 +116,7 @@ data_cat <- pivot_longer(
 )
 ggplot(data_cat, aes(value)) +
   geom_bar() +
-  facet_grid(cols = vars(type), rows = vars(var), scales = "free") +
+  facet_wrap(~var+type, scales = "free") +
   labs(title = "Categorical variables")
 
 # continuous variables
@@ -129,19 +132,19 @@ data_cont$var <- factor(
 )
 ggplot(data_cont, aes(value)) +
   geom_density() +
-  facet_grid(cols = vars(type), rows = vars(var), scales = "free") +
+  facet_wrap(~var+type, scales = "free") +
   labs(title = "Continuous variables")
 ```
 
 ## Process the **development** dataset
 
-Follow below orders:
+Follow below order:
 
-1.  creating dummy variables;
+1.  creating dummy variables: `step_dummy`;
 
-2.  creating rcs terms;
+2.  creating rcs terms: `step_rcs`;
 
-3.  creating interaction terms.
+3.  creating interaction terms: `step_interaction`. Note `step_interaction` automatically unpacks categorical variables (dummy variables) and continuous variables (rcs terms), if applicable.
 
 ```{r}
 # -------- dummy variables --------
@@ -178,7 +181,7 @@ names(data.dev)
 
 ## Process the **external** dataset
 
-Follow the same orders, with some **Note**:
+Follow the same order:
 
 1.  creating dummy variables;
 
@@ -212,6 +215,8 @@ names(data.ext)
 ```
 
 ## Outcome
+
+Create the outcome `y` with predefined formula, which is simplified a little bit.
 
 ```{r}
 data <- bind_rows(
@@ -274,13 +279,19 @@ data.ext <- data %>% filter(type == "external")
 ```{r}
 library(gtsummary)
 
+# Median (Q1, Q3)
 data %>% 
   tbl_summary(by = "type") %>% 
   modify_header(label = "**Variable**") %>% # update the column header
   modify_caption("Table 1. Summary of the two datasets") %>%
   bold_labels() %>% 
   as_flex_table()
+```
 
+**Note:** below table contains **all the mean values** needed to transport the centered algorithm.
+
+```{r}
+# Mean (SD)
 data %>% 
   tbl_summary(by = "type",statistic = list(all_continuous() ~ "{mean} ({sd})")) %>% 
   modify_header(label = "**Variable**") %>% # update the column header

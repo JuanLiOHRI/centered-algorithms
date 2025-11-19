@@ -89,6 +89,9 @@ test <- data %>% filter(region == "southeast") %>% select(-region)
 Below visualize the relationship between `charges` and other continuous variables in the `train` dataset.
 
 ```{r}
+#| warning: false
+#| message: false
+
 # pivot the data longer to plot in facets
 dflong <- pivot_longer(
   train,
@@ -260,9 +263,11 @@ test <- step_interaction(test, interaction_list)
 
 # -------- centering --------
 # 1. centering using the mean values in the `train` dataset
+# This is for transporting the centered algorithm
 test_means_train <- step_center(test, vars_center, means_train)
 
 # 2. centering using the mean values in the `test` dataset
+# This is for recalibration
 # get mean values
 means_test <- get_mean(test, vars_mean)
 # centering vars in the test dataset
@@ -291,29 +296,16 @@ test_means_train$pred.c, test_means_test$pred.c))
 ## Some calibration plots on the test dataset
 
 ```{r}
-# ---------- Overall calibration ----------
-# The original model 
-res <- calibration(test_means_train$pred.o, test_means_train$charges, labelPos.x = 10000, marginPlt = TRUE)
-res
+res <- calibration(test_means_train$pred.o, test_means_train$charges, labelPos.x = 11000, labelPos.y = 50000, marginPlt = TRUE)
 ```
 
 ```{r}
-# The centered model with the updated means
-res <- calibration(test_means_test$pred.c, test_means_test$charges, labelPos.x = 10000, marginPlt = TRUE)
-res
+# To confirm that this is identical to above
+res <- calibration(test_means_train$pred.c, test_means_train$charges, labelPos.x = 11000, labelPos.y = 50000, marginPlt = TRUE)
 ```
 
 ```{r}
-# ---------- Calibration on sex ----------
-# The original model 
-res <- calibration(test_means_train$pred.o, test_means_train$charges, group = test_means_train$sex, labelPos.x = 10000, marginPlt = TRUE)
-res
-```
-
-```{r}
-# The original model with the updated means
-res <- calibration(test_means_test$pred.c, test_means_test$charges, group = test_means_test$sex, labelPos.x = 10000, marginPlt = TRUE)
-res
+res <- calibration(test_means_test$pred.c, test_means_test$charges, labelPos.x = 11000, labelPos.y = 50000, marginPlt = TRUE)
 ```
 
 ```{r}

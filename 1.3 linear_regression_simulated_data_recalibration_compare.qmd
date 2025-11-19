@@ -1,0 +1,256 @@
+---
+title: "Centered algorithm with simulated data: Linear Regression, re-calibration, compare different noise level"
+author: "Juan Li"
+date: 2025-11-18
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Data manipulation
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(fastDummies) # make dummy variables
+library(rms)
+
+source("R/util.R") 
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+source("R/compare.R") # a wrapper function to compare calibration under different noise to data ratio
+```
+
+# Simulate data for this tutorial
+
+Same as in `1.1 linear_regression_simulated_data.qmd`.
+
+## Create predictors in the **development** dataset
+
+```{r}
+n <- 1000
+seed <- 567
+
+set.seed(seed)
+data.dev <- data.frame(
+  x1 = sample(
+    c("cat1", "cat2"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.5, 0.5)
+  ),
+  x2 = sample(
+    c("cat1", "cat2", "cat3"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.1, 0.4, 0.5)
+  ),
+  x3 = rnorm(n, mean = 100, sd = 38), # normal distribution
+  x4 = rnorm(n, mean = 50, sd = 15), # normal distribution
+  x5 = runif(n, min = 0, max = 200), # uniform distribution
+  x6 = skewed(n, 15, 150, 6, 2, seed) # skewed distribution
+)
+```
+
+## Create predictors in the **external** dataset
+
+Both distribution and summary stats can be different. For simplicity, I'll change ratios of `x1` and `x2`, and shuffle `x3`to `x6`.
+
+```{r}
+n <- 500
+
+set.seed(seed)
+data.ext <- data.frame(
+  x1 = sample(
+    c("cat1", "cat2"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.3, 0.7)
+  ),
+  x2 = sample(
+    c("cat1", "cat2", "cat3"),
+    size = n,
+    replace = TRUE,
+    prob = c(0.3, 0.3, 0.4)
+  ),
+  x3 = runif(n, min = 0, max = 200), # `x5` in development dataset
+  x4 = skewed(n, 15, 150, 6, 2, seed), # `x6` in development dataset 
+  x5 = rnorm(n, mean = 50, sd = 15), # `x4` in development dataset 
+  x6 = rnorm(n, mean = 100, sd = 38) # `x3` in development dataset 
+)
+```
+
+## Process the **development** dataset
+
+Follow below order:
+
+1.  creating dummy variables: `step_dummy`;
+
+2.  creating rcs terms: `step_rcs`;
+
+3.  creating interaction terms: `step_interaction`. Note `step_interaction` automatically unpacks categorical variables (dummy variables) and continuous variables (rcs terms), if applicable.
+
+```{r}
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data.dev <- step_dummy(data.dev, vars_cat)
+
+# -------- rcs --------
+# x4
+k_x4 <- 4
+rcs.fit <- rcs(data.dev$x4, k_x4)
+knots_x4 <- attributes(rcs.fit)$parms # knot locations
+# x6
+k_x6 <- 3
+rcs.fit <- rcs(data.dev$x6, k_x6)
+knots_x6 <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data.dev <- step_rcs(data.dev, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+data.dev <- step_interaction(data.dev, interaction_list)
+names(data.dev)
+```
+
+## Process the **external** dataset
+
+Follow the same order:
+
+1.  creating dummy variables;
+
+2.  creating rcs terms: **using knot locations from the DEVELOPMENT datasets**;
+
+3.  creating interaction terms.
+
+```{r}
+# -------- dummy variables --------
+vars_cat <- c("x1", "x2")
+data.ext <- step_dummy(data.ext, vars_cat)
+
+# -------- rcs --------
+# unpack rcs
+vars_rcs <- c("x4", "x6")
+knots_list <- list(knots_x4, knots_x6)
+knots_list <- setNames(knots_list, vars_rcs)
+data.ext <- step_rcs(data.ext, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("x1", "x2"),
+  c("x2", "x3"),
+  c("x3", "x5"),
+  c("x2", "x4"),
+  c("x3", "x4"),
+  c("x4", "x6")
+)
+data.ext <- step_interaction(data.ext, interaction_list)
+names(data.ext)
+```
+
+## Outcome
+
+Create the outcome `y` with predefined formula, which is simplified a little bit.
+
+```{r}
+data <- bind_rows(
+  data.dev %>% mutate(type = "development"),
+  data.ext %>% mutate(type = "external")
+)
+
+# outcome
+# Note: I skip the interaction term between two variables with rcs. It's fine for this example.
+data <- data %>%
+  mutate(
+    y = case_when(
+      x2 == "cat1" ~ 100 +
+      3 * x1_cat2 +
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      10 * x3 +
+      25 * x4_rcs_1 +
+      18 * x4_rcs_2 +
+      21 * x4_rcs_3 -
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_by_x5,
+    x2 == "cat2" ~ 100 +
+      5 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      21 * x3 +        # change based on value of x2
+      8 * x4_rcs_1 +  # change based on value of x2
+      36 * x4_rcs_2 +  # change based on value of x2
+      14 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_by_x5,
+    x2 == "cat3" ~ 100 +
+      7 * x1_cat2 +    # change based on value of x2
+      2 * x2_cat2 +
+      0.5 * x2_cat3 +
+      5 * x3 +         # change based on value of x2
+      2.5 * x4_rcs_1 + # change based on value of x2
+      40 * x4_rcs_2 +  # change based on value of x2
+      16 * x4_rcs_3 -  # change based on value of x2
+      6 * x5 +
+      0.6 * x6_rcs_1 +
+      1.5 * x6_rcs_2 +
+      0.1 * x3_by_x5
+  ))
+```
+
+## Compare with different noise level
+
+```{r}
+vec_sd_noise <- c(3, 10, 50, 100, 500, 1000, 5000)
+
+result <- NULL
+for (sd_noise in vec_sd_noise) {
+  res_i <- compare(data, sd_noise, seed)
+  result <- rbind(result, res_i)
+}
+```
+
+```{r}
+df_long <- result %>%
+  select(-c(y_mean_dev, y_mean_ext)) %>% 
+  pivot_longer(-c(model, sd_noise), names_to = "type", values_to = "value")
+df_long$type <- factor(df_long$type, levels = c("Intercept", "Slope", "Emax", "E90", "Eavg"))
+
+ggplot(df_long, aes(sd_noise, value, color = model)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~type, scales = "free")
+```
+
+```{r}
+
+```
