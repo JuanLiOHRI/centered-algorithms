@@ -1,7 +1,7 @@
 ---
-title: "Centered algorithms using real data - Logistic regression"
+title: "Centered algorithms using real data - Cox"
 author: "Juan Li"
-date: 2025-09-18
+date: 2025-11-24
 format: 
   html:
     toc: true
@@ -37,69 +37,24 @@ source("R/util.R")
 source("R/calibration.R") # for calibration plots
 ```
 
-# Dataset: Heart Disease Dataset
+# Dataset: Breast Cancer (METABRIC)
 
-We will use the [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) dataset for the examples.
+We will use the [Breast Cancer (METABRIC)](https://www.kaggle.com/datasets/gunesevitan/breast-cancer-metabric) dataset for the examples.
 
-About this dataset, see this \[notebook\] (https://www.kaggle.com/code/tentotheminus9/what-causes-heart-disease-explaining-the-model)
-
-1.  `age`: continuous. The person's age in years
-
-2.  `sex`: categorical. The person's sex (1 = male, 0 = female)
-
-3.  `cp`: categorical. The chest pain experienced (0: typical angina, 1: atypical angina, 2: non-anginal pain, 3: asymptomatic)
-
-4.  `trestbps`: continuous. The person's resting blood pressure (in mm Hg on admission to the hospital)
-
-5.  `chol`: continuous. The person's serum cholestoral in mg/dl
-
-6.  `fbs`: categorical. The person's fasting blood sugar (\> 120 mg/dl, 1 = true; 0 = false)
-
-7.  `restecg`: categorical. Resting electrocardiographic measurement (0 = normal, 1 = having ST-T wave abnormality, 2 = showing probable or definite left ventricular hypertrophy by Estes' criteria)
-
-8.  `thalach`: continuous. The person's maximum heart rate achieved
-
-9.  `exang`: categorical. Exercise induced angina (0 = no; 1 = yes)
-
-10. `oldpeak`: continuous. ST depression induced by exercise relative to rest ('ST' relates to positions on the ECG plot. See more here)
-
-11. `slope`: categorical. the slope of the peak exercise ST segment (0: upsloping, 1: flat, 2: downsloping)
-
-12. `ca`: The number of major vessels (0-3) colored by flourosopy
-
-13. `thal`: categorical. A blood disorder called thalassemia (1 = normal; 2 = fixed defect; 3 = reversable defect)
-
-14. `target`: Heart disease (0 = no, 1 = yes)
+About this dataset, see this \[notebook\] (https://www.kaggle.com/code/gunesevitan/survival-analysis/notebook). There are two events listed in the dataset. Those events are survival `Overall Survival Status` and relapse `Relapse Free Status`. There are also two durations associated with those events which are `Overall Survival (Months)` and `Relapse Free Status (Months)`. 
 
 ```{r}
-data <- read.csv("data/heart.csv", stringsAsFactors = TRUE)
-dim(data) # there is no missing data in this dataset
+data <- read.csv("data/breast.csv", stringsAsFactors = TRUE, na.strings = c("NA","NULL"," ",""))
+dim(data) 
 
-data <- data %>% mutate(thal = ifelse(thal == 0, 1, thal)) # 7 cases that thal == 0, collapse levels to 1`
-data_num <- data
-
-# categorical variables
-vars_cat <- c("sex", "cp", "fbs", "restecg", "exang", "slope", "thal")
-data[vars_cat] <- lapply(data[vars_cat], factor) 
-
+# In this example for centered algorithm, we only use the complete cases
+data <- data[complete.cases(data), ] %>% droplevels()
+dim(data)
 summary(data)
-
-## Barplots for all predictors
-
-df_long <- pivot_longer(
-  data_num,
-  -c(target),
-  names_to = "variable",
-  values_to = "value"
-)
-
-ggplot(df_long, aes(value, fill = factor(target))) +
-  geom_histogram() +
-  facet_wrap(~variable, scales = "free") +
-  theme_minimal()
 ```
 
-## correlation
+## data preprocessing
+
 
 ```{r}
 #| fig.width: 12
@@ -192,64 +147,29 @@ cbind(coef(fit.o), coef(fit.c))
 
 # outcome mean
 y_mean <- mean(train$target)
-y_mean_logit <- log(y_mean/(1-y_mean))
+y_mean_logit <- log(y_mean/(1-y_mean)) # this is equal to log(n_target_1/n_target_0)
 paste0("Mean outcome: ", y_mean)
 paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit)
+
+# global offset
+offset <- coef(fit.c)[1] - y_mean_logit
+paste0("Global offset: ", offset)
 ```
 
 ```{r}
-# centered model, with manually setting the intercept to the mean outcome
-fit.c.2 <- fit.c
-fit.c.2$coefficients[1] <- y_mean_logit
-
-# model coefficients
-cbind(coef(fit.o), coef(fit.c), coef(fit.c.2))
-
-# prediction: note `fit.o` and `fit.c` have the same predicted value, while `fit.c.2` has a different one
+# prediction
 train$pred.o <- predict(fit.o, newdata = train, type = "response")
 train$pred.c <- predict(fit.c, newdata = train, type = "response")
-train$pred.c.2 <- predict(fit.c.2, newdata = train, type = "response")
 
 head(train %>% select(contains("pred")))
 ```
 
 ```{r}
-# log likelihood
-# --- original model ---
-paste0("Log likelihood of the original model, by extracting: ", logLik(fit.o))
-paste0("Log likelihood of the original model, by calculating: ", get_logLik(train$target, train$pred.o, coef(fit.o)))
-# --- centered model ---
-paste0("Log likelihood of the centered model, by extracting: ", logLik(fit.c))
-paste0("Log likelihood of the centered model, by calculating: ", get_logLik(train$target, train$pred.c, coef(fit.c)))
-# --- centered model with adjusted intercept ---
-paste0("Log likelihood of the centered model with adjusted intercept: ", get_logLik(train$target, train$pred.c.2, coef(fit.c.2)))
-```
-
-```{r}
 # AUC
 roc.o <- roc(train$target, train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the original model: ", roc.o$auc)
+paste0("AUC of the original model within TRAIN dataset: ", roc.o$auc)
 roc.c <- roc(train$target, train$pred.c, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the centered model: ", roc.c$auc)
-roc.c.2 <- roc(train$target, train$pred.c.2, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the centered model with a different intercept: ", roc.c.2$auc)
-```
-
-## Some calibration plots on the test dataset
-
-```{r}
-# ---------- Overall calibration ----------
-# The original model 
-res <- calibration(train$pred.o, train$target, marginPlt = TRUE)
-res
-
-# The centered model 
-res <- calibration(train$pred.c, train$target, marginPlt = TRUE)
-res
-
-# The centered model, with manually setting the intercept to the mean outcome
-res <- calibration(train$pred.c.2, train$target, marginPlt = TRUE)
-res
+paste0("AUC of the centered model within TRAIN dataset: ", roc.c$auc)
 ```
 
 # Apply the models on the `test` dataset
@@ -269,9 +189,11 @@ test <- step_interaction(test, interaction_list)
 
 # -------- centering --------
 # 1. centering using the mean values in the `train` dataset
+# This is for transporting the centered algorithm
 test_means_train <- step_center(test, vars_center, means_train)
 
 # 2. centering using the mean values in the `test` dataset
+# This is for recalibration
 # get mean values
 means_test <- get_mean(test, vars_mean)
 # centering vars in the test dataset
@@ -284,43 +206,65 @@ test_means_train$pred.o <- predict(fit.o, newdata = test_means_train, type = "re
 
 # The centered model on the test dataset, using the mean values in the train dataset
 test_means_train$pred.c <- predict(fit.c, newdata = test_means_train, type = "response")
+```
 
-# The centered model with adjusted intercept on the test dataset, using the mean values in the train dataset
-test_means_train$pred.c.2 <- predict(fit.c.2, newdata = test_means_train, type = "response")
+## Re-calibrate/Update the model in the test dataset
 
-# The centered model on the test dataset, using the mean values in the test dataset
-# NOTE: need to manually changing the intercept to the new outconme mean
+Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the __train__ dataset.
+
+```{r}
+# outcome mean in the test dataset
 y_mean_test <- mean(test$target)
-y_mean_logit_test <- log(y_mean_test/(1-y_mean_test))
+y_mean_logit_test <- log(y_mean_test/(1-y_mean_test)) # this is equal to log(n_target_1/n_target_0)
 paste0("Mean outcome: ", y_mean_test)
 paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_test)
-fit.c.3 <- fit.c
-fit.c.3$coefficients[1] <- y_mean_logit_test
-test_means_test$pred.c <- predict(fit.c.3, newdata = test_means_test, type = "response")
 
-# To confirm that column 2 and 3 below are identical
-head(cbind(test_means_train$target, test_means_train$pred.o, 
-test_means_train$pred.c, test_means_train$pred.c.2, test_means_test$pred.c))
+# update the model
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- y_mean_logit_test + offset
+
+# The centered model on the test dataset, using the mean values in the test dataset
+test_means_train$pred.c.2 <- predict(
+  fit.c.2,
+  newdata = test_means_train,
+  type = "response"
+)
+
+# check
+head(cbind(
+  test_means_train$pred.o,
+  test_means_train$pred.c,
+  test_means_train$pred.c.2
+))
+```
+
+NOTE: since re-calibration is just shifting predicted probabilities horizontally, it will NOT affect discrimination, i.e., AUC.
+
+```{r}
+# AUC
+roc.o <- roc(test$target, test_means_train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
+paste0("AUC of the original model within TEST dataset: ", roc.o$auc)
+roc.c <- roc(test$target, test_means_train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
+paste0("AUC of the centered model within TEST dataset: ", roc.c$auc)
+
+roc.c.2 <- roc(test$target, test_means_train$pred.c.2, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
+paste0("AUC of the recalibrated model within TEST dataset: ", roc.c.2$auc)
 ```
 
 ## Some calibration plots on the test dataset
 
 ```{r}
-# ---------- Overall calibration ----------
-# The original model 
-res <- calibration(test_means_train$pred.o, test_means_train$target, marginPlt = TRUE)
+res <- calibration(test_means_train$pred.o, test_means_train$target, package = "rms")
 res
+```
 
-# The centered model 
-res <- calibration(test_means_train$pred.c, test_means_train$target, marginPlt = TRUE)
+```{r}
+res <- calibration(test_means_train$pred.c, test_means_train$target, package = "rms")
 res
+```
 
-# The centered model, adjusted intercept 
-res <- calibration(test_means_train$pred.c.2, test_means_train$target, marginPlt = TRUE)
-res
-
-# The centered model with the updated means
-res <- calibration(test_means_test$pred.c, test_means_test$target, marginPlt = TRUE)
+```{r}
+res <- calibration(test_means_train$pred.c.2, test_means_test$target, package = "rms")
 res
 ```
 

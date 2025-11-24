@@ -63,7 +63,7 @@ data.dev <- data.frame(
   x4 = rnorm(n, mean = 50, sd = 15), # normal distribution
   x5 = runif(n, min = 0, max = 200), # uniform distribution
   x6 = skewed(n, 15, 150, 6, 2, seed), # skewed distribution
-  error = rnorm(n, mean = 0, sd = 3)
+  error = rnorm(n, mean = 0, sd = 200)
 )
 ```
 
@@ -93,7 +93,7 @@ data.ext <- data.frame(
   x4 = skewed(n, 15, 150, 6, 2, seed), # `x6` in development dataset 
   x5 = rnorm(n, mean = 50, sd = 15), # `x4` in development dataset 
   x6 = rnorm(n, mean = 100, sd = 38), # `x3` in development dataset 
-  error = rnorm(n, mean = 0, sd = 3)
+  error = rnorm(n, mean = 0, sd = 200)
 )
 ```
 

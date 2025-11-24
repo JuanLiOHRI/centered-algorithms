@@ -351,11 +351,11 @@ print(head(res))
 
 In this scenario, we have two methods, which basically is the order of operations:
 
-1. __Method 1__: Centering the vatiable `x_4` first, then get the rcs terms of the new centered vatiable.
+1.  **Method 1**: Centering the vatiable `x_4` first, then get the rcs terms of the new centered vatiable.
 
-2. __Method 2__: Get the rcs terms of the orginial `x_4` first, then centering each rcs term.
+2.  **Method 2**: Get the rcs terms of the orginial `x_4` first, then centering each rcs term.
 
-I'll use below example to show that __Method 2__ is preferred.
+I'll use below example to show that **Method 2** is preferred.
 
 ```{r}
 # --- Original: linear regression model on `rcs(x4,k_x4)` ---
@@ -363,7 +363,7 @@ fit <- lm(y ~ rcs(x4,k_x4), data = data)
 coef(fit)
 ```
 
-#### __Method 1__: centering first, then rcs
+#### **Method 1**: centering first, then rcs
 
 ```{r}
 data <- data %>%
@@ -378,7 +378,7 @@ coef(fit)
 predict(fit, newdata = data.frame(x4_C = 0))
 ```
 
-#### __Method 2__: rcs first, then centering
+#### **Method 2**: rcs first, then centering
 
 ```{r}
 # --- Original: linear regression model on the original variable 'rcs(x4,k_x4)', but with rcs terms ---
@@ -403,7 +403,7 @@ coef(fit)
 
 # Interaction terms
 
--   There is an older version talking about direct centering and conditional centering, for details, see `/backup/1.2 simulated_data_wt_interaction.qmd'.
+-   There is an older version talking about direct centering and conditional centering, for details, see \`/backup/1.2 simulated_data_wt_interaction.qmd'.
 
     -   Note: with conditional centering, other coefficients except for intercept (which is equal to $\overline{y}$) are affected.
 

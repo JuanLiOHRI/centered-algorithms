@@ -1,7 +1,7 @@
 ---
 title: "Centered algorithms using real data - Logistic regression"
 author: "Juan Li"
-date: 2025-09-18
+date: 2025-11-24
 format: 
   html:
     toc: true
@@ -192,11 +192,13 @@ cbind(coef(fit.o), coef(fit.c))
 
 # outcome mean
 y_mean <- mean(train$target)
-y_mean_logit <- log(y_mean/(1-y_mean))
+y_mean_logit <- log(y_mean/(1-y_mean)) # this is equal to log(n_target_1/n_target_0)
 paste0("Mean outcome: ", y_mean)
 paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit)
 
-offset <- coef(fit.c)[1] - y_mean_logit # DISCUSSION
+# global offset
+offset <- coef(fit.c)[1] - y_mean_logit
+paste0("Global offset: ", offset)
 ```
 
 ```{r}
@@ -243,27 +245,58 @@ means_test <- get_mean(test, vars_mean)
 test_means_test <- step_center(test, vars_center, means_test)
 ```
 
+## Re-calibrate/Update the model in the test dataset
+
+Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the __train__ dataset.
+
+```{r}
+# outcome mean in the test dataset
+y_mean_test <- mean(test$target)
+y_mean_logit_test <- log(y_mean_test/(1-y_mean_test)) # this is equal to log(n_target_1/n_target_0)
+paste0("Mean outcome: ", y_mean_test)
+paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_test)
+
+# update the model
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- y_mean_logit_test + offset
+```
+
+```{r}
+# The original model on the test dataset
+test_means_train$pred.logit.o <- predict(fit.o, newdata = test_means_train)
+
+# The centered model on the test dataset
+test_means_train$pred.logit.c <- predict(fit.c, newdata = test_means_train)
+
+# The re-calibrated model on the test dataset
+test_means_train$pred.logit.c.2 <- predict(fit.c.2, newdata = test_means_train)
+
+# check
+paste0("Difference between log[E(Y=1)] in test and log[E(Y=1)] in train: ", y_mean_logit_test-y_mean_logit)
+head(cbind(
+  test_means_train$pred.logit.o,
+  test_means_train$pred.logit.c,
+  test_means_train$pred.logit.c.2,
+  test_means_train$pred.logit.c.2 - test_means_train$pred.logit.c
+))
+```
+
 ```{r}
 # The original model on the test dataset
 test_means_train$pred.o <- predict(fit.o, newdata = test_means_train, type = "response")
 
-# The centered model on the test dataset, using the mean values in the train dataset
+# The centered model on the test dataset
 test_means_train$pred.c <- predict(fit.c, newdata = test_means_train, type = "response")
 
-# The centered model on the test dataset, using the mean values in the test dataset
-# NOTE: need to manually changing the intercept to the new outconme mean
-paste0("Mean outcome in the dataset: ", mean(test_means_test$charges))
-fit.c.2 <- fit.c
-y_mean_test <- mean(test$target)
-y_mean_logit_test <- log(y_mean_test/(1-y_mean_test))
-paste0("Mean outcome: ", y_mean_test)
-paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_test)
-fit.c.2$coefficients[1] <- y_mean_logit_test + offset
-test_means_test$pred.c <- predict(fit.c.2, newdata = test_means_test, type = "response")
+# The re-calibrated model on the test dataset
+test_means_train$pred.c.2 <- predict(fit.c.2, newdata = test_means_train, type = "response")
 
-# To confirm that column 2 and 3 below are identical
-head(cbind(test_means_train$charges, test_means_train$pred.o, 
-test_means_train$pred.c, test_means_test$pred.c))
+# check
+head(cbind(
+  test_means_train$pred.o,
+  test_means_train$pred.c,
+  test_means_train$pred.c.2
+))
 ```
 
 NOTE: since re-calibration is just shifting predicted probabilities horizontally, it will NOT affect discrimination, i.e., AUC.
@@ -275,7 +308,7 @@ paste0("AUC of the original model within TEST dataset: ", roc.o$auc)
 roc.c <- roc(test$target, test_means_train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
 paste0("AUC of the centered model within TEST dataset: ", roc.c$auc)
 
-roc.c.2 <- roc(test$target, test_means_test$pred.c, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
+roc.c.2 <- roc(test$target, test_means_train$pred.c.2, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
 paste0("AUC of the recalibrated model within TEST dataset: ", roc.c.2$auc)
 ```
 
@@ -292,7 +325,7 @@ res
 ```
 
 ```{r}
-res <- calibration(test_means_test$pred.c, test_means_test$target, package = "rms")
+res <- calibration(test_means_train$pred.c.2, test_means_test$target, package = "rms")
 res
 ```
 
