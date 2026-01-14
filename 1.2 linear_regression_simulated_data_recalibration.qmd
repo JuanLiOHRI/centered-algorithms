@@ -63,7 +63,7 @@ data.dev <- data.frame(
   x4 = rnorm(n, mean = 50, sd = 15), # normal distribution
   x5 = runif(n, min = 0, max = 200), # uniform distribution
   x6 = skewed(n, 15, 150, 6, 2, seed), # skewed distribution
-  error = rnorm(n, mean = 0, sd = 200)
+  error = rnorm(n, mean = 0, sd = 300)
 )
 ```
 
@@ -93,7 +93,7 @@ data.ext <- data.frame(
   x4 = skewed(n, 15, 150, 6, 2, seed), # `x6` in development dataset 
   x5 = rnorm(n, mean = 50, sd = 15), # `x4` in development dataset 
   x6 = rnorm(n, mean = 100, sd = 38), # `x3` in development dataset 
-  error = rnorm(n, mean = 0, sd = 200)
+  error = rnorm(n, mean = 0, sd = 500)
 )
 ```
 
@@ -346,6 +346,7 @@ fit.o <- lm(y ~ x1 + x2 + x3 + rcs(x4,k_x4) + x5 + rcs(x6,k_x6) +
 
 ```{r}
 # The centered model on the development dataset
+# To confirm that all coefficients remain the same, except for the intercept, which is the outcome mean in `fit.c` 
 paste0("Mean outcome in the dataset: ", mean(data.dev$y))
 fit.c <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x3_C + x4_rcs_1_C + x4_rcs_2_C + x4_rcs_3_C + x5_C + x6_rcs_1_C + x6_rcs_2_C +
                 # interaction terms of x1 * x2
@@ -418,7 +419,7 @@ pred.2 <- predict(fit.c, newdata = data.ext.d)
 # Model 3
 pred.3 <- predict(fit.c, newdata = data.ext.t)
 
-# Update model intercept to the new outconme mean
+# Update model intercept to the new outcome mean
 fit.c.2 <- fit.c
 fit.c.2$coefficients[1] <- mean(data.ext$y)
 

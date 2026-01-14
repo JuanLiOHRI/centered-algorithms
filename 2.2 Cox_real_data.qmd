@@ -41,7 +41,7 @@ source("R/calibration.R") # for calibration plots
 
 We will use the [Breast Cancer (METABRIC)](https://www.kaggle.com/datasets/gunesevitan/breast-cancer-metabric) dataset for the examples.
 
-About this dataset, see this \[notebook\] (https://www.kaggle.com/code/gunesevitan/survival-analysis/notebook). There are two events listed in the dataset. Those events are survival `Overall Survival Status` and relapse `Relapse Free Status`. There are also two durations associated with those events which are `Overall Survival (Months)` and `Relapse Free Status (Months)`. 
+About this dataset, see this \[notebook\] (https://www.kaggle.com/code/gunesevitan/survival-analysis/notebook). There are two events listed in the dataset. Those events are survival `Overall Survival Status` and relapse `Relapse Free Status`. There are also two durations associated with those events which are `Overall Survival (Months)` and `Relapse Free Status (Months)`.
 
 ```{r}
 data <- read.csv("data/breast.csv", stringsAsFactors = TRUE, na.strings = c("NA","NULL"," ",""))
@@ -54,7 +54,6 @@ summary(data)
 ```
 
 ## data preprocessing
-
 
 ```{r}
 #| fig.width: 12
@@ -210,7 +209,7 @@ test_means_train$pred.c <- predict(fit.c, newdata = test_means_train, type = "re
 
 ## Re-calibrate/Update the model in the test dataset
 
-Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the __train__ dataset.
+Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the **train** dataset.
 
 ```{r}
 # outcome mean in the test dataset

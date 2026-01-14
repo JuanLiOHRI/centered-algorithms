@@ -247,7 +247,7 @@ test_means_test <- step_center(test, vars_center, means_test)
 
 ## Re-calibrate/Update the model in the test dataset
 
-Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the __train__ dataset.
+Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the **train** dataset.
 
 ```{r}
 # outcome mean in the test dataset
