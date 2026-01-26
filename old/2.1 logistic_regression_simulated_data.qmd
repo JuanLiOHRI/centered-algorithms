@@ -1,0 +1,127 @@
+---
+title: "Centered algorithm with simulated data: Logistic Regression"
+author: "Juan Li"
+date: 2026-01-14
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(grid)
+library(ggpubr) # ggarrange
+library(patchwork)
+library(fastDummies) # make dummy variables
+library(rms)
+library(pROC)
+library(gtools)
+
+source("R/util.R") 
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+```{r}
+set.seed(100)
+
+# "orginal" model
+df <- data.frame(logit = rnorm(1000))
+df$p <- exp(df$logit) / (1 + exp(df$logit))
+df$y <- rbinom(1000, size = 1, prob = df$p)
+
+# See `R/calibration.R`
+plot.calibration(df)$plot
+
+# confirm they are the same
+res <- calibration(df$p, df$y, package = "rms")
+res
+```
+
+Now investigate the influence of shifting `logit` by a constant
+
+```{r}
+# orginal model
+plot.o <- plot.calibration(df)$plot
+
+# shifted model
+res_shift <- res["Intercept"]
+c_vec <- c(-4, -3, -2, -1, -0.5, -0.1, 0, 0.1, 0.5, 1, 2, 3, 4, res_shift) # 0.2 is the intercept of the calibration plot, see `res` above
+df_res <- matrix(0, nrow = length(c_vec), ncol = length(res) + 1)
+colnames(df_res) <- c("shift", names(res))
+df_res[, 1] <- c_vec
+df_res <- as.data.frame(df_res)
+
+plotList <- list()
+for (i in seq_len(length(c_vec))) {
+  c <- c_vec[i]
+  df.new <- data.frame(logit = df$logit + c, y = df$y)
+  df.new$p <- exp(df.new$logit) / (1 + exp(df.new$logit))
+
+  res <- calibration(df.new$p, df$y, package = "rms")
+  df_res[i, ] <- c(c, res)
+
+  p1 <- plot.calibration(
+    df.new,
+    color = "red",
+    titlestr = paste0("The shift c = ", c),
+    plot.o = plot.o
+  )$plot
+
+  p2 <- ggplot(df.new, aes(p)) +
+    geom_histogram(bins = 101, fill = "white", color = "black")+
+    theme_bw()
+
+  plotList[[i]] <- ggarrange(p1, p2, nrow = 2, heights = c(1, 0.5))
+}
+
+ggarrange(plotlist = plotList)
+
+df_long <- pivot_longer(
+  df_res,
+  -shift,
+  names_to = "metric",
+  values_to = "value"
+)
+df_long$metric <- factor(df_long$metric, levels = names(res))
+
+ggplot(df_long, aes(shift, value)) +
+  geom_point(size = 1) +
+  geom_line() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(data = df_long %>% filter(shift == 0), aes(shift, value), color = "blue", size = 2) +
+  geom_point(data = df_long %>% filter(shift == res_shift), aes(shift, value), color = "orange", size = 2) +
+  facet_wrap(~metric, scales = "free") +
+  theme_minimal()
+
+df_long_c <- df_long %>% filter(metric %in% c("Intercept", "Slope", "Emax", "Eavg", "E90", "S:z", "S:p"))
+ggplot(df_long_c, aes(shift, value)) +
+  geom_point(size = 1) +
+  geom_line() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(data = df_long_c %>% filter(shift == 0), aes(shift, value), color = "blue", size = 2) +
+  geom_point(data = df_long_c %>% filter(shift == res_shift), aes(shift, value), color = "orange", size = 2) +
+  facet_wrap(~metric, scales = "free") +
+  theme_minimal()
+```
+
+```{r}
+
+```

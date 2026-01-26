@@ -1,0 +1,224 @@
+---
+title: "Centered algorithms using real data - Cox"
+author: "Juan Li"
+date: 2026-01-21
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(gtsummary)
+
+library(rms)
+library(polspline)
+
+library(survival)
+library(ggsurvfit)
+library(survminer)
+
+library(CalibrationCurves) # https://cran.r-project.org/web/packages/CalibrationCurves/vignettes/CalibrationCurves.html
+
+source("R/util.R") 
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: unpack the rcs components
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values
+# root.search: Root searching, not used in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+# Load Data - Breast Cancer Survival Data from Rotterdam and Germany
+
+See `?CalibrationCurves::trainDataSurvival`.
+
+inst: Institution code
+
+time: Survival time in days
+
+status: censoring status 1=censored, 2=dead
+
+age: Age in years
+
+sex: Male=1 Female=2
+
+ph.ecog: ECOG performance score as rated by the physician. 0=asymptomatic, 1= symptomatic but completely ambulatory, 2= in bed \<50% of the day, 3= in bed \> 50% of the day but not bedbound, 4 = bedbound *Note:* only one case when `ph.ecog == 3`, combine it with `ph.ecog == 2`
+
+ph.karno: Karnofsky performance score (bad=0-good=100) rated by physician
+
+pat.karno: Karnofsky performance score as rated by patient
+
+meal.cal: Calories consumed at meals
+
+wt.loss: Weight loss in last six months (pounds)
+
+```{r}
+data(trainDataSurvival)
+data(testDataSurvival)
+
+names(trainDataSurvival)
+names(testDataSurvival)
+
+names(trainDataSurvival)[which(!(names(trainDataSurvival) %in% names(testDataSurvival)))]
+```
+
+```{r}
+data <- bind_rows(
+  data.dev %>% mutate(type = "development"), 
+  data.ext %>% mutate(type = "external")
+)
+
+data %>% 
+  tbl_summary(by = "type") %>% 
+  modify_header(label = "**Variable**") %>% # update the column header
+  modify_caption("Table 1. Summary of the two datasets") %>%
+  bold_labels() %>% 
+  as_flex_table()
+```
+
+Kaplan-Meier plots: https://www.emilyzabor.com/survival-analysis-in-r.html
+
+```{r}
+survfit2(Surv(time, status) ~ type, data = data) %>% 
+  ggsurvfit() +
+  add_confidence_interval() 
+  # For some reason, add_risktable() does not work here. But it works fine in RStudio.
+```
+
+# Original and centered models using the `data.dev` dataset
+
+1.  To use `rms::calibrate`, we need to fit the cox model using `rms::cph`.
+
+2.  The fit must have specified `x=TRUE`, `y=TRUE`.
+
+3.  It evaluate calibration on the fitted cph object, *i.e.*, on train data.
+
+Important arguments
+
+1.  `u` - the time point for which to validate predictions for survival models. For `cph` fits, you must have specified `surv=TRUE, time.inc=u`, where `u` is the constant specifying the time to predict.
+
+2.  `m` - group predicted `u`-time units survival into intervals containing `m` subjects on the average (for survival models only)
+
+For baseline hazard `h0`, see https://missingdatasolutions.rbind.io/2022/12/cox-baseline-hazard/
+
+```{r}
+u <- 100 
+
+# The original model
+# fit.o <- cph(Surv(time, status) ~ ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss + sex * rcs(age,4), 
+#               data = data.dev, x=TRUE, y=TRUE, surv=TRUE, time.inc=u)
+fit.o <- coxph(Surv(time, status) ~ ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss + sex * rcs(age,4), 
+              data = data.dev, x=TRUE, y=TRUE)              
+fit.o %>% tbl_regression(exp = TRUE) 
+
+fit.o.h0 <- basehaz(fit.o, centered = FALSE) # baseline hazard
+fit.o.h0.c <- basehaz(fit.o, centered = TRUE) # baseline hazard, centered
+```
+
+```{r}
+# Get the centered variables and terms
+# -------- dummy variables --------
+vars_cat <- c("sex", "ph.ecog")
+data.dev <- step_dummy(data.dev, vars_cat)
+
+# -------- rcs --------
+# age
+rcs.fit <- rcs(data.dev$age, 4)
+age_knots_data.dev <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("age")
+knots_list <- list(age_knots_data.dev)
+knots_list <- setNames(knots_list, vars_rcs)
+data.dev <- step_rcs(data.dev, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("sex", "age")
+)
+data.dev <- step_interaction(data.dev, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(data.dev)
+# get mean values
+means.dev <- get_mean(data.dev, vars_mean)
+# centering vars in the data.dev dataset
+vars_center <- names(means.dev)
+data.dev <- step_center(data.dev, vars_center, means.dev)
+```
+
+```{r}
+# The centered model on the trin dataset
+# fit.c <- cph(Surv(time, status) ~ ph.ecog_1_C + ph.ecog_2_C + ph.karno_C + pat.karno_C + meal.cal_C + wt.loss_C +
+#               sex_2_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + 
+#               sex_2_by_age_rcs_1_C + sex_2_by_age_rcs_2_C + sex_2_by_age_rcs_3_C, 
+#               data = data.dev, x=TRUE, y=TRUE, surv=TRUE, time.inc=u)
+fit.c <- coxph(Surv(time, status) ~ ph.ecog_1_C + ph.ecog_2_C + ph.karno_C + pat.karno_C + meal.cal_C + wt.loss_C +
+              sex_2_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + 
+              sex_2_by_age_rcs_1_C + sex_2_by_age_rcs_2_C + sex_2_by_age_rcs_3_C, 
+              data = data.dev, x=TRUE, y=TRUE)
+
+fit.c.h0 <- basehaz(fit.c, centered = FALSE) # baseline hazard
+fit.c.h0.c <- basehaz(fit.c, centered = TRUE) # baseline hazard, centered. confirm that it's the same as 'fit.c.h0'
+
+cbind(coef(fit.o), coef(fit.c))
+cbind(fit.o.h0, fit.o.h0.c, fit.c.h0, fit.c.h0.c)
+```
+
+# Apply the models on the `data.ext` dataset
+
+```{r}
+# Preprocess the `data.ext` dataset
+
+# -------- dummy variables --------
+data.ext <- step_dummy(data.ext, vars_cat)
+
+# -------- rcs --------
+# IMPORTANT: using the knot locations in the `data.dev` dataset
+data.ext <- step_rcs(data.ext, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+data.ext <- step_interaction(data.ext, interaction_list)
+
+# -------- centering --------
+# 1. centering using the mean values in the `data.dev` dataset
+# This is for transporting the centered algorithm
+data.ext.d <- step_center(data.ext, vars_center, means.dev)
+
+# 2. centering using the mean values in the `data.ext` dataset
+# This is for recalibration
+# get mean values
+means.ext <- get_mean(data.ext, vars_mean)
+# centering vars in the data.ext dataset
+data.ext.t <- step_center(data.ext, vars_center, means.ext)
+```
+
+```{r}
+valProbSurvival(fit.o, data.dev, plotCal = "ggplot", nk = 5)
+```
+
+```{r}
+data(trainDataSurvival)
+data(testDataSurvival)
+sFit = coxph(Surv(ryear, rfs) ~ csize + cnode + grade3, data = trainDataSurvival,
+             x = TRUE, y = TRUE)
+calPerf = valProbSurvival(sFit, testDataSurvival, plotCal = "ggplot", nk = 5)
+```
+
+```{r}
+
+```

@@ -23,16 +23,18 @@ library(patchwork)
 library(fastDummies) # make dummy variables
 library(rms)
 library(pROC)
+library(car) # the logit function
+library(gtsummary)
 
 source("R/util.R") 
 # functions in "util.R"
 # get_rcs: implement the formula of rcs components
 # step_dummy: dummy variables
-# step_rcs: rcs
+# step_rcs: unpack the rcs components
 # step_interaction: interaction terms
 # step_center: centering
-# get_mean: get mean values from the original dataset
-# root.search: Root searching, not in use in this .qmd file
+# get_mean: get mean values
+# root.search: Root searching, not used in this .qmd file
 
 source("R/calibration.R") # for calibration plots
 ```
@@ -119,26 +121,29 @@ prop.table(table(data %>% select(fbs, target)), 1)
 
 ## Data sampling
 
-From above figures, it appears that `fbs` doesn't have a strong correlation with `target`. In order to exaggrate the difference from `train` and `test` sets, I'll use the `fbs == 0` data as the `train` dataset, and the `fbs == 1` data as the `test` dataset.
+2.  `sex`: categorical. The person's sex (1 = male, 0 = female)
+
+To exaggerate the difference between development and external dataset, let's build a model on males (sex == 1) and test it on females (sex == 0).
 
 ```{r}
-train <- data %>% filter(fbs == 0) %>% select(-fbs)
-test <- data %>% filter(fbs == 1) %>% select(-fbs)
+data.dev <- data %>% filter(sex == 1) %>% select(-sex)
+data.ext <- data %>% filter(sex == 0) %>% select(-sex)
 ```
 
 ```{r}
-library(gtsummary)
-
-data %>% 
-  mutate(type = ifelse(fbs == 0, "train", "test")) %>% 
-  tbl_summary(by = "type") %>% 
-  modify_header(label = "**Variable**") %>% # update the column header
-  modify_caption("Table 1. Summary of the two datasets") %>%
-  bold_labels() %>% 
-  as_flex_table()
+data %>%
+  mutate(type = ifelse(fbs == 0, "data.dev", "data.ext")) %>%
+  tbl_strata(
+    strata = "type",
+    ~ .x %>%
+      tbl_summary(by = "target") %>%
+      modify_header(label = "**Variable**") %>% # update the column header
+      modify_caption("Table 1. Summary of the two datasets") %>%
+      bold_labels()
+  )
 ```
 
-# Original and centered models using the `train` dataset
+# Original and centered models using the `data.dev` dataset
 
 There is no easy data visualization like in `1.4 linear_regression_real_data.qmd` to suggest the nonlinear and interaction terms. For the purpose of this example, I'll just use below model.
 
@@ -146,187 +151,284 @@ There is no easy data visualization like in `1.4 linear_regression_real_data.qmd
 # The original model
 fit.o <- glm(target ~ 
   cp + trestbps + chol + restecg + thalach + exang + ca + thal +
-  sex * rcs(age,4) + slope * oldpeak, data = train, family = "binomial")
+  fbs * rcs(age,4) + slope * oldpeak, data = data.dev, family = "binomial")
 ```
 
 ```{r}
 # Get the centered variables and terms
 # -------- dummy variables --------
-vars_cat <- c("sex", "cp", "restecg", "exang", "slope", "thal")
-train <- step_dummy(train, vars_cat)
+vars_cat <- c("fbs", "cp", "restecg", "exang", "slope", "thal")
+data.dev <- step_dummy(data.dev, vars_cat)
 
 # -------- rcs --------
 # age
-rcs.fit <- rcs(train$age, 4)
-age_knots_train <- attributes(rcs.fit)$parms # knot locations
+rcs.fit <- rcs(data.dev$age, 4)
+age_knots_data.dev <- attributes(rcs.fit)$parms # knot locations
 # unpack rcs
 vars_rcs <- c("age")
-knots_list <- list(age_knots_train)
+knots_list <- list(age_knots_data.dev)
 knots_list <- setNames(knots_list, vars_rcs)
-train <- step_rcs(train, vars_rcs, knots_list)
+data.dev <- step_rcs(data.dev, vars_rcs, knots_list)
 
 # -------- interaction terms --------
 interaction_list <- list(
-  c("sex", "age"),
+  c("fbs", "age"),
   c("slope", "oldpeak")
 )
-train <- step_interaction(train, interaction_list)
+data.dev <- step_interaction(data.dev, interaction_list)
 
 # -------- centering --------
-vars_mean <- names(train)
+vars_mean <- names(data.dev)
 # get mean values
-means_train <- get_mean(train, vars_mean)
-# centering vars in the train dataset
-vars_center <- names(means_train)
-train <- step_center(train, vars_center, means_train)
+means.dev <- get_mean(data.dev, vars_mean)
+# centering vars in the data.dev dataset
+vars_center <- names(means.dev)
+data.dev <- step_center(data.dev, vars_center, means.dev)
 ```
 
 ```{r}
 # The centered model on the trin dataset
 fit.c <- glm(target ~ 
   cp_1_C + cp_2_C + cp_3_C + trestbps_C + chol_C + restecg_1_C + restecg_2_C + thalach_C + exang_1_C + ca_C + thal_2_C + thal_3_C +
-  sex_1_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + slope_1_C + slope_2_C + oldpeak_C +
-  sex_1_by_age_rcs_1_C + sex_1_by_age_rcs_2_C + sex_1_by_age_rcs_3_C + slope_1_by_oldpeak_C + slope_2_by_oldpeak_C, data = train, family = "binomial")
+  fbs_1_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + slope_1_C + slope_2_C + oldpeak_C +
+  fbs_1_by_age_rcs_1_C + fbs_1_by_age_rcs_2_C + fbs_1_by_age_rcs_3_C + slope_1_by_oldpeak_C + slope_2_by_oldpeak_C, data = data.dev, family = "binomial")
 
 cbind(coef(fit.o), coef(fit.c))
 
 # outcome mean
-y_mean <- mean(train$target)
-y_mean_logit <- log(y_mean/(1-y_mean)) # this is equal to log(n_target_1/n_target_0)
-paste0("Mean outcome: ", y_mean)
-paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit)
+y_mean_dev <- mean(data.dev$target)
+y_mean_logit_dev <- logit(y_mean_dev)
+paste0("Mean outcome: ", y_mean_dev)
+paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_dev)
 
 # global offset
-offset <- coef(fit.c)[1] - y_mean_logit
+offset <- coef(fit.c)[1] - y_mean_logit_dev
 paste0("Global offset: ", offset)
 ```
 
 ```{r}
 # prediction
-train$pred.o <- predict(fit.o, newdata = train, type = "response")
-train$pred.c <- predict(fit.c, newdata = train, type = "response")
+data.dev$prop.o <- predict(fit.o, newdata = data.dev, type = "response")
+data.dev$prop.c <- predict(fit.c, newdata = data.dev, type = "response")
 
-head(train %>% select(contains("pred")))
+head(data.dev %>% select(contains("pred")))
 ```
 
-```{r}
-# AUC
-roc.o <- roc(train$target, train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the original model within TRAIN dataset: ", roc.o$auc)
-roc.c <- roc(train$target, train$pred.c, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the centered model within TRAIN dataset: ", roc.c$auc)
-```
-
-# Apply the models on the `test` dataset
+# Apply the models on the `data.ext` dataset
 
 ```{r}
-# Preprocess the `test` dataset
+# Preprocess the `data.ext` dataset
 
 # -------- dummy variables --------
-test <- step_dummy(test, vars_cat)
+data.ext <- step_dummy(data.ext, vars_cat)
 
 # -------- rcs --------
-# IMPORTANT: using the knot locations in the `train` dataset
-test <- step_rcs(test, vars_rcs, knots_list)
+# IMPORTANT: using the knot locations in the `data.dev` dataset
+data.ext <- step_rcs(data.ext, vars_rcs, knots_list)
 
 # -------- interaction terms --------
-test <- step_interaction(test, interaction_list)
+data.ext <- step_interaction(data.ext, interaction_list)
 
 # -------- centering --------
-# 1. centering using the mean values in the `train` dataset
+# 1. centering using the mean values in the `data.dev` dataset
 # This is for transporting the centered algorithm
-test_means_train <- step_center(test, vars_center, means_train)
+data.ext.d <- step_center(data.ext, vars_center, means.dev)
 
-# 2. centering using the mean values in the `test` dataset
+# 2. centering using the mean values in the `data.ext` dataset
 # This is for recalibration
 # get mean values
-means_test <- get_mean(test, vars_mean)
-# centering vars in the test dataset
-test_means_test <- step_center(test, vars_center, means_test)
+means.ext <- get_mean(data.ext, vars_mean)
+# centering vars in the data.ext dataset
+data.ext.t <- step_center(data.ext, vars_center, means.ext)
 ```
 
-## Re-calibrate/Update the model in the test dataset
+## Re-calibrate/Update the model in the data.ext dataset
 
-Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the **train** dataset.
+Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the **data.dev** dataset.
+
+Here we have 5 models:
+
+1.  Model_1: The original model;
+
+2.  Model_2: The centered model: logit\[p(y=1\|x)\] = logit(mean(y.dev)) + off_set + sum\[beta_i\*(x_i - mean(x_i.dev))\];
+
+3.  Model_3, **the re-calibrated model.**: The centered model: logit\[p(y=1\|x)\] = logit(mean(y.ext)) + off_set + sum\[beta_i\*(x_i - mean(x_i.dev))\]
 
 ```{r}
-# outcome mean in the test dataset
-y_mean_test <- mean(test$target)
-y_mean_logit_test <- log(y_mean_test/(1-y_mean_test)) # this is equal to log(n_target_1/n_target_0)
-paste0("Mean outcome: ", y_mean_test)
-paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_test)
+# Model 1
+prop.1 <- predict(fit.o, newdata = data.ext, type = "response")
+logit.1 <- predict(fit.o, newdata = data.ext)
 
-# update the model
+# Model 2
+prop.2 <- predict(fit.c, newdata = data.ext.d, type = "response")
+logit.2 <- predict(fit.c, newdata = data.ext.d)
+
+# Model 3
+# Update model intercept to the new outcome mean
+y_mean_ext <- mean(data.ext$target)
+y_mean_logit_ext <- logit(y_mean_ext)
 fit.c.2 <- fit.c
-fit.c.2$coefficients[1] <- y_mean_logit_test + offset
-```
+fit.c.2$coefficients[1] <- y_mean_logit_ext + offset
 
-```{r}
-# The original model on the test dataset
-test_means_train$pred.logit.o <- predict(fit.o, newdata = test_means_train)
-
-# The centered model on the test dataset
-test_means_train$pred.logit.c <- predict(fit.c, newdata = test_means_train)
-
-# The re-calibrated model on the test dataset
-test_means_train$pred.logit.c.2 <- predict(fit.c.2, newdata = test_means_train)
-
-# check
-paste0("Difference between log[E(Y=1)] in test and log[E(Y=1)] in train: ", y_mean_logit_test-y_mean_logit)
-head(cbind(
-  test_means_train$pred.logit.o,
-  test_means_train$pred.logit.c,
-  test_means_train$pred.logit.c.2,
-  test_means_train$pred.logit.c.2 - test_means_train$pred.logit.c
-))
-```
-
-```{r}
-# The original model on the test dataset
-test_means_train$pred.o <- predict(fit.o, newdata = test_means_train, type = "response")
-
-# The centered model on the test dataset
-test_means_train$pred.c <- predict(fit.c, newdata = test_means_train, type = "response")
-
-# The re-calibrated model on the test dataset
-test_means_train$pred.c.2 <- predict(fit.c.2, newdata = test_means_train, type = "response")
-
-# check
-head(cbind(
-  test_means_train$pred.o,
-  test_means_train$pred.c,
-  test_means_train$pred.c.2
-))
-```
-
-NOTE: since re-calibration is just shifting predicted probabilities horizontally, it will NOT affect discrimination, i.e., AUC.
-
-```{r}
-# AUC
-roc.o <- roc(test$target, test_means_train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the original model within TEST dataset: ", roc.o$auc)
-roc.c <- roc(test$target, test_means_train$pred.o, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the centered model within TEST dataset: ", roc.c$auc)
-
-roc.c.2 <- roc(test$target, test_means_train$pred.c.2, levels=c(0, 1), na.rm=TRUE, ci=TRUE) 
-paste0("AUC of the recalibrated model within TEST dataset: ", roc.c.2$auc)
+prop.3 <- predict(fit.c.2, newdata = data.ext.d, type = "response")
+logit.3 <- predict(fit.c.2, newdata = data.ext.d)
+diff <- logit.3 - logit.1
+shift.3 <- diff[1]
 ```
 
 ## Some calibration plots on the test dataset
 
 ```{r}
-res <- calibration(test_means_train$pred.o, test_means_train$target, package = "rms")
+res <- calibration(prop.1, data.ext$target, package = "rms")
+res
+shift.o <- res["Intercept"] 
+```
+
+```{r}
+res <- calibration(prop.2, data.ext$target, package = "rms")
 res
 ```
 
 ```{r}
-res <- calibration(test_means_train$pred.c, test_means_train$target, package = "rms")
+res <- calibration(prop.3, data.ext$target, package = "rms")
 res
 ```
 
+# Explore different shifts
+
+From: https://www.rdocumentation.org/packages/rms/versions/8.1-0/topics/val.prob
+
+1.  Below metrics are for **discrimination**, therefore unaffected by the shift:
+
+-   Dxy: Somers' Dxy, rank correlation between p and y. Dxy = 2 \* AUC - 1
+
+-   C (ROC): AUC
+
+2.  Below metrics are for **goodness of fit**:
+
+-   R2: Nagelkerke-Cox-Snell-Maddala-Magee R-squared index,
+
+-   D, D:Chi-sq, D:p: Discrimination index
+
+-   U, U:Chi-sq, U:p, Q: Unreliability index, Q is the quality index
+
+-   Brier score: average squared difference in p and y
+
+3.  Below metrics are for **calibration**
+
+-   Intercept, and Slope: coefficients of the logistic regression of y \~ logit. By shifting logit, slope remains the same.
+
+-   Emax, Eavg, E90: maximum, average, and the 0.9 quantile of the absolute difference in predicted and loess-calibrated probabilities,
+
+-   S:z, S: p: the Spiegelhalter Z-test for calibration accuracy, and its two-tailed p-value.
+
 ```{r}
-res <- calibration(test_means_train$pred.c.2, test_means_test$target, package = "rms")
-res
+df <- data.frame(
+  y = data.ext$target,
+  p = prop.1,
+  logit = logit.1
+)
+
+# orginal model
+plot.o <- plot.calibration(df)$plot
+
+# shifted model
+c_vec <- c(-3, -2, -1, -0.5, -0.1, 0, 0.1, 0.5, 1, 2, 3, shift.3, shift.o)
+df_res <- matrix(0, nrow = length(c_vec), ncol = length(res) + 1)
+colnames(df_res) <- c("shift", names(res))
+df_res[, 1] <- c_vec
+df_res <- as.data.frame(df_res)
+
+plotList <- list()
+for (i in seq_len(length(c_vec))) {
+  c <- c_vec[i]
+  df.new <- data.frame(logit = df$logit + c, y = df$y)
+  df.new$p <- exp(df.new$logit) / (1 + exp(df.new$logit))
+
+  res <- calibration(df.new$p, df$y, package = "rms", pl = FALSE)
+  df_res[i, ] <- c(c, res)
+
+  p1 <- plot.calibration(
+    df.new,
+    color = "red",
+    titlestr = paste0("The shift c = ", c),
+    plot.o = plot.o
+  )$plot
+
+  p2 <- ggplot(df.new, aes(p)) +
+    geom_histogram(bins = 101, fill = "white", color = "black") +
+    theme_bw()
+
+  plotList[[i]] <- ggarrange(p1, p2, nrow = 2, heights = c(1, 0.5))
+}
+
+ggarrange(plotlist = plotList)
+
+df_long <- pivot_longer(
+  df_res,
+  -shift,
+  names_to = "metric",
+  values_to = "value"
+)
+df_long$metric <- factor(df_long$metric, levels = names(res))
+df_long <- df_long %>%
+  mutate(
+    color = case_when(
+      shift == 0 ~ "green3",
+      shift == shift.3 ~ "red",
+      shift == shift.o ~ "orange",
+      TRUE ~ "black"
+    ),
+    size = factor(case_when(
+      shift == 0 ~ 2,
+      shift == shift.3 ~ 2,
+      shift == shift.o ~ 2,
+      TRUE ~ 1
+    ))
+  )
+
+ggplot(df_long, aes(shift, value)) +
+  geom_line() +
+  geom_point(aes(size = size, color = color)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_size_manual(values = c(1, 2)) +
+  scale_color_manual(
+    name = "",
+    values = c("black", "green3", "orange", "red"),
+    labels = c("Random shift", "Original model: shift = 0", "Shift as suggested by the calibration plot of the original model", "Shift by recalibration")
+  ) +
+  facet_wrap(~metric, scales = "free") +
+  theme_minimal() +
+  guides(size = "none")+
+  theme(legend.position = "bottom")
+
+df_long_c <- df_long %>%
+  filter(
+    metric %in% c("Intercept", "Slope", "Emax", "Eavg", "E90", "S:z", "S:p")
+  )
+ggplot(df_long_c, aes(shift, value)) +
+  geom_line() +
+  geom_point(aes(size = size, color = color)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_size_manual(values = c(1, 2)) +
+  scale_color_manual(
+    name = "",
+    values = c("black", "green3", "orange", "red"),
+    labels = c("Random shift", "Original model: shift = 0", "Shift as suggested by the calibration plot of the original model", "Shift by recalibration")
+  ) +
+  facet_wrap(~metric, scales = "free") +
+  theme_minimal() +
+  guides(size = "none")+
+  theme(legend.position = "bottom")
+```
+
+```{r}
+paste0("Logit (log-odds) of the mean outcome in data.dev: ", y_mean_logit_dev)
+paste0("Intercept of the original centered algorithm: ", coef(fit.c)[1])
+paste0("Global offset: ", offset)
+
+paste0("Logit (log-odds) of the mean outcome in data.ext: ", y_mean_logit_ext)
+paste0("Intercept of the re-calibrated centered algorithm: ", coef(fit.c.2)[1])
 ```
 
 ```{r}

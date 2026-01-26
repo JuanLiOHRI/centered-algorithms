@@ -27,11 +27,11 @@ source("R/util.R")
 # functions in "util.R"
 # get_rcs: implement the formula of rcs components
 # step_dummy: dummy variables
-# step_rcs: rcs
+# step_rcs: unpack the rcs components
 # step_interaction: interaction terms
 # step_center: centering
-# get_mean: get mean values from the original dataset
-# root.search: Root searching, not in use in this .qmd file
+# get_mean: get mean values
+# root.search: Root searching, not used in this .qmd file
 
 source("R/calibration.R") # for calibration plots
 ```

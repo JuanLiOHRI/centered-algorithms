@@ -451,7 +451,7 @@ fit <- lm(y ~ x1_cat2_C + x2_cat2_C + x2_cat3_C + x1_cat2_by_x2_cat2_C + x1_cat2
 coef(fit)
 ```
 
-# Interaction of one categorical variable and one continuous variabl (no rcs): `x2`, `x3`
+# Interaction of one categorical variable and one continuous variable (no rcs): `x2`, `x3`
 
 ```{r}
 #| warning: false
@@ -487,7 +487,7 @@ fit <- lm(y ~ x2_cat2_C + x2_cat3_C + x3_C + x2_cat2_by_x3_C + x2_cat3_by_x3_C, 
 coef(fit)
 ```
 
-# Interaction of two continuous variabl (no rcs): `x3`, `x5`
+# Interaction of two continuous variables (no rcs): `x3`, `x5`
 
 ```{r}
 #| warning: false
