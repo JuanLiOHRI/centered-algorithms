@@ -45,9 +45,11 @@ An example using real data on centering and recalibration of a logistic regressi
 -   Helper functions used: same as in the previous example.
 -   Note to **Doug**: I have used a different way to split the data to exaggerate the difference between development and external dataset, see the last plot.
 
-### `3.1 Cox_real_data.qmd`
+### `3.1 Cox_real_data.qmd` 
 
-An example using real data on centering and recalibration of a logistic regression model.
+**work in progress** Please do not review it yet, I'll let you know when this is ready.
+
+An example using real data on centering and recalibration of a Cox model. 
 
 -   Dataset: Breast Cancer Survival Data from Rotterdam and Germany, see `?CalibrationCurves::trainDataSurvival`. Please refer to the `.qmd` file for details.
 -   Helper functions used: same as in the previous example.
