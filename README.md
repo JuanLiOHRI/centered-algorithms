@@ -47,7 +47,7 @@ An example using real data on centering and recalibration of a logistic regressi
 
 ### `3.1 Cox_real_data.qmd` 
 
-**work in progress** Please do not review it yet, I'll let you know when this is ready.
+**WORK IN PROGRESS** Please do not review it yet, I'll let you know when this is ready.
 
 An example using real data on centering and recalibration of a Cox model. 
 
