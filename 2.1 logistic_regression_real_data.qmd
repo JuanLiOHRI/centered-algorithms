@@ -197,7 +197,7 @@ cbind(coef(fit.o), coef(fit.c))
 
 # outcome mean
 y_mean_dev <- mean(data.dev$target)
-y_mean_logit_dev <- logit(y_mean_dev)
+y_mean_logit_dev <- log(y_mean_dev/(1-y_mean_dev))
 paste0("Mean outcome: ", y_mean_dev)
 paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_dev)
 
@@ -266,32 +266,28 @@ logit.2 <- predict(fit.c, newdata = data.ext.d)
 # Model 3
 # Update model intercept to the new outcome mean
 y_mean_ext <- mean(data.ext$target)
-y_mean_logit_ext <- logit(y_mean_ext)
+y_mean_logit_ext <- log(y_mean_ext/(1-y_mean_ext))
 fit.c.2 <- fit.c
 fit.c.2$coefficients[1] <- y_mean_logit_ext + offset
+shift.3 <- y_mean_logit_ext - y_mean_logit_dev
 
 prop.3 <- predict(fit.c.2, newdata = data.ext.d, type = "response")
 logit.3 <- predict(fit.c.2, newdata = data.ext.d)
-diff <- logit.3 - logit.1
-shift.3 <- diff[1]
-```
-
-## Some calibration plots on the test dataset
-
-```{r}
-res <- calibration(prop.1, data.ext$target, package = "rms")
-res
-shift.o <- res["Intercept"] 
 ```
 
 ```{r}
-res <- calibration(prop.2, data.ext$target, package = "rms")
-res
+recal_model <- glm(data.ext$target ~ 1 + offset(logit.1), family = binomial)
+recal_model
+prop.4 <- predict(recal_model, newdata = data.ext, type = "response")
+shift.recal <- coef(recal_model)
 ```
 
 ```{r}
-res <- calibration(prop.3, data.ext$target, package = "rms")
-res
+recal_model_2 <- glm(data.ext$target ~ logit.1, family = binomial)
+recal_model_2
+prop.5 <- predict(recal_model_2, newdata = data.ext, type = "response")
+shift.recal_2 <- coef(recal_model_2)[1]
+
 ```
 
 # Explore different shifts
@@ -323,6 +319,8 @@ From: https://www.rdocumentation.org/packages/rms/versions/8.1-0/topics/val.prob
 -   S:z, S: p: the Spiegelhalter Z-test for calibration accuracy, and its two-tailed p-value.
 
 ```{r}
+res <- calibration(prop.5, data.ext$target, package = "rms", pl = FALSE)
+
 df <- data.frame(
   y = data.ext$target,
   p = prop.1,
@@ -333,7 +331,7 @@ df <- data.frame(
 plot.o <- plot.calibration(df)$plot
 
 # shifted model
-c_vec <- c(-3, -2, -1, -0.5, -0.1, 0, 0.1, 0.5, 1, 2, 3, shift.3, shift.o)
+c_vec <- c(seq(-3, 3, by = 0.25), shift.3, shift.recal)
 df_res <- matrix(0, nrow = length(c_vec), ncol = length(res) + 1)
 colnames(df_res) <- c("shift", names(res))
 df_res[, 1] <- c_vec
@@ -370,55 +368,80 @@ df_long <- pivot_longer(
   names_to = "metric",
   values_to = "value"
 )
+
 df_long$metric <- factor(df_long$metric, levels = names(res))
 df_long <- df_long %>%
   mutate(
     color = case_when(
       shift == 0 ~ "green3",
       shift == shift.3 ~ "red",
-      shift == shift.o ~ "orange",
+      shift == shift.recal ~ "orange",
       TRUE ~ "black"
     ),
     size = factor(case_when(
       shift == 0 ~ 2,
       shift == shift.3 ~ 2,
-      shift == shift.o ~ 2,
+      shift == shift.recal ~ 2,
       TRUE ~ 1
     ))
   )
 
+# results of Platt scaling
+df_5 <- data.frame(
+    shift = rep(shift.recal_2, length(res)),
+    metric = names(res),
+    value = res
+  )
+df_5$metric <- factor(df_5$metric, levels = names(res))
+
 ggplot(df_long, aes(shift, value)) +
   geom_line() +
   geom_point(aes(size = size, color = color)) +
+  geom_point(data = df_5, size = 5, color = "blue", shape = "\u2605") +
   geom_vline(xintercept = 0, linetype = "dashed") +
   scale_size_manual(values = c(1, 2)) +
   scale_color_manual(
     name = "",
     values = c("black", "green3", "orange", "red"),
-    labels = c("Random shift", "Original model: shift = 0", "Shift as suggested by the calibration plot of the original model", "Shift by recalibration")
+    labels = c(
+      "Random shift",
+      "Original model: shift = 0",
+      "Shift by glm with offset",
+      "Shift by recalibration"
+    )
   ) +
   facet_wrap(~metric, scales = "free") +
   theme_minimal() +
-  guides(size = "none")+
+  guides(size = "none") +
   theme(legend.position = "bottom")
 
 df_long_c <- df_long %>%
   filter(
-    metric %in% c("Intercept", "Slope", "Emax", "Eavg", "E90", "S:z", "S:p")
+    metric %in% c("Intercept", "Emax", "Eavg", "E90", "S:z", "S:p")
+  )
+df_5_c <- df_5 %>%
+  filter(
+    metric %in% c("Intercept", "Emax", "Eavg", "E90", "S:z", "S:p")
   )
 ggplot(df_long_c, aes(shift, value)) +
   geom_line() +
   geom_point(aes(size = size, color = color)) +
+  geom_point(data = df_5_c, size = 5, color = "blue", shape = "\u2605") +
   geom_vline(xintercept = 0, linetype = "dashed") +
   scale_size_manual(values = c(1, 2)) +
   scale_color_manual(
     name = "",
     values = c("black", "green3", "orange", "red"),
-    labels = c("Random shift", "Original model: shift = 0", "Shift as suggested by the calibration plot of the original model", "Shift by recalibration")
+    labels = c(
+      "Random shift",
+      "Original model: shift = 0",
+      "Shift by glm with offset",
+      "Shift by recalibration"
+    )
   ) +
   facet_wrap(~metric, scales = "free") +
   theme_minimal() +
-  guides(size = "none")+
+  guides(size = "none") +
   theme(legend.position = "bottom")
 ```
 

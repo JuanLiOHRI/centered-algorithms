@@ -1,3 +1,4 @@
+```         
 ---
 title: "Centered algorithms using real data - Cox"
 author: "Juan Li"
@@ -9,6 +10,7 @@ format:
     css: styles.css
 editor: visual
 ---
+```
 
 ```{r}
 #| warning: false
@@ -47,110 +49,124 @@ source("R/calibration.R") # for calibration plots
 
 See `?CalibrationCurves::trainDataSurvival`.
 
-inst: Institution code
-
-time: Survival time in days
-
-status: censoring status 1=censored, 2=dead
-
-age: Age in years
-
-sex: Male=1 Female=2
-
-ph.ecog: ECOG performance score as rated by the physician. 0=asymptomatic, 1= symptomatic but completely ambulatory, 2= in bed \<50% of the day, 3= in bed \> 50% of the day but not bedbound, 4 = bedbound *Note:* only one case when `ph.ecog == 3`, combine it with `ph.ecog == 2`
-
-ph.karno: Karnofsky performance score (bad=0-good=100) rated by physician
-
-pat.karno: Karnofsky performance score as rated by patient
-
-meal.cal: Calories consumed at meals
-
-wt.loss: Weight loss in last six months (pounds)
-
 ```{r}
-data(trainDataSurvival)
-data(testDataSurvival)
-
-names(trainDataSurvival)
-names(testDataSurvival)
-
-names(trainDataSurvival)[which(!(names(trainDataSurvival) %in% names(testDataSurvival)))]
-```
-
-```{r}
-data <- bind_rows(
-  data.dev %>% mutate(type = "development"), 
-  data.ext %>% mutate(type = "external")
-)
-
-data %>% 
-  tbl_summary(by = "type") %>% 
-  modify_header(label = "**Variable**") %>% # update the column header
-  modify_caption("Table 1. Summary of the two datasets") %>%
-  bold_labels() %>% 
-  as_flex_table()
+# variables for `time` and `status` are `ryear` and `rfs`, respectively
+data(trainDataSurvival) # Rotterdam
+data(testDataSurvival) # German Breast Cancer Study Group
 ```
 
 Kaplan-Meier plots: https://www.emilyzabor.com/survival-analysis-in-r.html
 
 ```{r}
-survfit2(Surv(time, status) ~ type, data = data) %>% 
+data <- bind_rows(
+  trainDataSurvival %>% select(ryear, rfs) %>% mutate(type = "train"),
+  testDataSurvival %>% select(ryear, rfs) %>% mutate(type = "test")
+)
+data$type <- factor(data$type, levels = c("train", "test"))
+
+survfit2(Surv(ryear, rfs) ~ type, data = data) %>% 
   ggsurvfit() +
-  add_confidence_interval() 
-  # For some reason, add_risktable() does not work here. But it works fine in RStudio.
+  add_confidence_interval() +
+  add_risktable()
+```
+
+## Variables
+
+### in both datasets
+
+`pid`: patient identifier
+
+`age`: age at surgery
+
+`meno`: menopausal status (0 = premenopausal, 1 = postmenopausal)
+
+`size`: tumor size, a factor with levels \<= 20, 20-50, \>50
+
+-   `csize`: Categorized tumor size, copied from size (factor)
+
+`grade`: differentiation grade
+
+-   `grade3`: Recoded grade factor (levels: "1-2", "3")
+
+`nodes`: number of positive lymph nodes
+
+-   `nodes2`: Winsorized node count (numeric)
+
+-   `nodes3`: Restricted cubic spline basis for nodes2 (numeric)
+
+-   `cnode`: Categorized node involvement (factor: "0", "1-3", "\>3")
+
+`pgr`: progesterone receptors (fmol/l)
+
+-   `pgr2`: Winsorized progesterone receptor level (numeric)
+
+-   `pgr3`: Restricted cubic spline basis for original pgr (numeric)
+
+`er`: estrogen receptors (fmol/l)
+
+`hormon`: hormonal treatment (0 = no, 1 = yes)
+
+`ryear`: Follow-up time for RFS, in years (numeric)
+
+`rfs`: Recurrence-free survival status (0 = no event, 1 = event) (numeric)
+
+`epoch`: Follow-up epoch indicator after splitting at 5 years (numeric)
+
+### only in `trainDataSurvival`
+
+`year`: year of surgery
+
+`chemo`: chemotherapy
+
+`rtime`: days to relapse or last follow-up
+
+`recur`: 0 = no relapse, 1 = relapse
+
+`dtime`: days to death or last follow-up
+
+`death`: 0 = alive, 1 = dead
+
+`tstart`
+
+### only in `testDataSurvival`
+
+`rfstime`, `status`
+
+```{r}
+data.dev <- trainDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2)
+data.ext <- testDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2)
+summary(data.dev)
+summary(data.ext)
 ```
 
 # Original and centered models using the `data.dev` dataset
 
-1.  To use `rms::calibrate`, we need to fit the cox model using `rms::cph`.
+Here we will use function `CalibrationCurves::valProbSurvival`, which seems to be more flexible.
 
-2.  The fit must have specified `x=TRUE`, `y=TRUE`.
+**Technical notes for `basehaz`:**
 
-3.  It evaluate calibration on the fitted cph object, *i.e.*, on train data.
-
-Important arguments
-
-1.  `u` - the time point for which to validate predictions for survival models. For `cph` fits, you must have specified `surv=TRUE, time.inc=u`, where `u` is the constant specifying the time to predict.
-
-2.  `m` - group predicted `u`-time units survival into intervals containing `m` subjects on the average (for survival models only)
-
-For baseline hazard `h0`, see https://missingdatasolutions.rbind.io/2022/12/cox-baseline-hazard/
+In the [document](https://www.rdocumentation.org/packages/survival/versions/3.8-3/topics/basehaz) for `basehaz`, it says that the default value for `centered` is `TRUE`. However, this centering is **only for continuous variables**. When the model only includes categorical variables, changing the parameter `centered` would yield same outputs. Also, as will be shown below, this is not identical to the cumulative baseline hazard of the centered algorithm.
 
 ```{r}
-u <- 100 
-
-# The original model
-# fit.o <- cph(Surv(time, status) ~ ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss + sex * rcs(age,4), 
-#               data = data.dev, x=TRUE, y=TRUE, surv=TRUE, time.inc=u)
-fit.o <- coxph(Surv(time, status) ~ ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss + sex * rcs(age,4), 
-              data = data.dev, x=TRUE, y=TRUE)              
+fit.o <- coxph(Surv(ryear, rfs) ~ csize + cnode + grade3 + pgr2, data = data.dev,
+             x = TRUE, y = TRUE)
 fit.o %>% tbl_regression(exp = TRUE) 
 
-fit.o.h0 <- basehaz(fit.o, centered = FALSE) # baseline hazard
-fit.o.h0.c <- basehaz(fit.o, centered = TRUE) # baseline hazard, centered
+fit.o.h0 <- basehaz(fit.o) 
+fit.o.h0.nc <- basehaz(fit.o, centered = FALSE) 
+
+# Verity it is the same as following
+sfit <- survfit(fit.o, se.fit = FALSE)
+chaz <- sfit$cumhaz
+
+head(cbind("time" = fit.o.h0$time, "hazard" = fit.o.h0$hazard, chaz, "hazard.nc" = fit.o.h0.nc$hazard))
 ```
 
 ```{r}
 # Get the centered variables and terms
 # -------- dummy variables --------
-vars_cat <- c("sex", "ph.ecog")
+vars_cat <- c("csize", "cnode", "grade3")
 data.dev <- step_dummy(data.dev, vars_cat)
-
-# -------- rcs --------
-# age
-rcs.fit <- rcs(data.dev$age, 4)
-age_knots_data.dev <- attributes(rcs.fit)$parms # knot locations
-# unpack rcs
-vars_rcs <- c("age")
-knots_list <- list(age_knots_data.dev)
-knots_list <- setNames(knots_list, vars_rcs)
-data.dev <- step_rcs(data.dev, vars_rcs, knots_list)
-
-# -------- interaction terms --------
-interaction_list <- list(
-  c("sex", "age")
-)
-data.dev <- step_interaction(data.dev, interaction_list)
 
 # -------- centering --------
 vars_mean <- names(data.dev)
@@ -162,21 +178,14 @@ data.dev <- step_center(data.dev, vars_center, means.dev)
 ```
 
 ```{r}
-# The centered model on the trin dataset
-# fit.c <- cph(Surv(time, status) ~ ph.ecog_1_C + ph.ecog_2_C + ph.karno_C + pat.karno_C + meal.cal_C + wt.loss_C +
-#               sex_2_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + 
-#               sex_2_by_age_rcs_1_C + sex_2_by_age_rcs_2_C + sex_2_by_age_rcs_3_C, 
-#               data = data.dev, x=TRUE, y=TRUE, surv=TRUE, time.inc=u)
-fit.c <- coxph(Surv(time, status) ~ ph.ecog_1_C + ph.ecog_2_C + ph.karno_C + pat.karno_C + meal.cal_C + wt.loss_C +
-              sex_2_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + 
-              sex_2_by_age_rcs_1_C + sex_2_by_age_rcs_2_C + sex_2_by_age_rcs_3_C, 
+# The centered model on the train dataset
+fit.c <- coxph(Surv(ryear, rfs) ~ `csize_20-50_C` + `csize_>50_C` + `cnode_1-3_C` + `cnode_>3_C` + grade3_3_C + pgr2_C, 
               data = data.dev, x=TRUE, y=TRUE)
-
-fit.c.h0 <- basehaz(fit.c, centered = FALSE) # baseline hazard
-fit.c.h0.c <- basehaz(fit.c, centered = TRUE) # baseline hazard, centered. confirm that it's the same as 'fit.c.h0'
-
 cbind(coef(fit.o), coef(fit.c))
-cbind(fit.o.h0, fit.o.h0.c, fit.c.h0, fit.c.h0.c)
+
+fit.c.h0 <- basehaz(fit.c) 
+fit.c.h0.nc <- basehaz(fit.c, centered = FALSE) 
+head(cbind("time" = fit.o.h0$time, fit.o.h0$hazard, fit.o.h0.nc$hazard, fit.c.h0$hazard, fit.c.h0.nc$hazard))
 ```
 
 # Apply the models on the `data.ext` dataset
@@ -186,13 +195,6 @@ cbind(fit.o.h0, fit.o.h0.c, fit.c.h0, fit.c.h0.c)
 
 # -------- dummy variables --------
 data.ext <- step_dummy(data.ext, vars_cat)
-
-# -------- rcs --------
-# IMPORTANT: using the knot locations in the `data.dev` dataset
-data.ext <- step_rcs(data.ext, vars_rcs, knots_list)
-
-# -------- interaction terms --------
-data.ext <- step_interaction(data.ext, interaction_list)
 
 # -------- centering --------
 # 1. centering using the mean values in the `data.dev` dataset
@@ -212,12 +214,14 @@ valProbSurvival(fit.o, data.dev, plotCal = "ggplot", nk = 5)
 ```
 
 ```{r}
-data(trainDataSurvival)
-data(testDataSurvival)
-sFit = coxph(Surv(ryear, rfs) ~ csize + cnode + grade3, data = trainDataSurvival,
-             x = TRUE, y = TRUE)
-calPerf = valProbSurvival(sFit, testDataSurvival, plotCal = "ggplot", nk = 5)
+valProbSurvival(fit.o, data.ext, plotCal = "ggplot", nk = 5)
 ```
+
+Note 1: Should multiply a constant to the baseline hazard, rather than add a constant. -> accumulative incident rate.
+
+Note 2: How to update the model to achieve it?
+
+
 
 ```{r}
 

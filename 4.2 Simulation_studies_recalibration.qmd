@@ -1,0 +1,445 @@
+---
+title: "Simulation studies - Recalibration"
+author: "Juan Li"
+date: 2026-04-14
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(gtsummary)
+library(rms)
+library(fGarch) # for skewed distribution with target mean and sd
+library(foreach)
+library(doParallel)
+
+source("R/util.R")
+# functions in "util.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: rcs
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values from the original dataset
+# root.search: Root searching, not in use in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+# Simulation study 2 - Recalibration of logistic regression
+
+## Data generation
+
+In this simulation study, we will generate data as follows:
+
+1.  We simulated derivation and validation samples of size N = 10000
+
+2.  For each subject in the *derivation sample*, we simulated a continuous covariate from a standard normal distribution: x \~ N(target_mu, target_sd). Default: `target_mu` = 0, `target_sd` = 1.
+
+3.  For each subject in the *validation sample*, we simulated x using a skew-normal distribution with the shifted mean (`target_mu` + `mu_shift`) and same `target_sd` as in the derivation sample. Default: `mu_shift` = 0.5, `xi` = -2. (`xi` is the shape/skewness parameter of the skew-normal distribution)
+
+4.  For each subject in the derivation sample, a linear predictor was defined as LP = x + alpha \* x\^2 + error, where error \~ N(0, error_sd). Default: `alpha` = 0.5, `error_sd` = 0.5.
+
+5.  For each subject in the validation sample, one linear predictor was defined: LP = drift + slope \* (x + alpha \* x\^2) + error, where error \~ N(0, error_sd).
+
+-   When `drift` = 0, and `slope` = 1, the `LP` is the same as in the \_derivation sample: LP = x + alpha \* x\^2 + error.
+
+-   When `drift` != 0, and `slope` = 1, the `LP` is with a different intercept: LP = drift + x + alpha \* x\^2 + error, where error \~ N(0, error_sd).
+
+-   When `drift` != 0, and `slope` != 1, the `LP` is with different intercept and different slope.
+
+6.  For each linear predictor in both samples, a binary outcome variable y was simulated from a Bernoulli distribution: Y = Be(p), where p = exp(LP)/(1+exp(LP)).
+
+```{r}
+data.lr <- function(
+  N.dev = 10000,
+  N.ext = 10000,
+  target_mu = 0,
+  target_sd = 1,
+  mu_shift = 0.5,
+  xi = -2,
+  alpha = 0.5,
+  error_sd = 0.5,
+  drift = 0,
+  slope = 1,
+  seed = 123
+) {
+  # N.dev     ...Sample size of the development dataset
+  # N.ext     ...Sample size of the validation/external dataset
+  # target_mu ...Target mean of the two distributions
+  # target_sd ...Target standard deviation of the two distributions
+  # mu_shift  ...Mean shift in the validation dataset
+  # xi        ...Shape/skewness parameter of the skew-normal distribution.
+  #               If xi>0, right-skewed, positive skewness. If xi<0, left-skewed, negative skewness.
+  # alpha     ...Coefficient of the quadratic term in the linear predictor
+  # error_sd  ...Standard deviation of the error term
+  # drift     ...Intercept drift in the validation dataset
+  # slope     ...Slope change in the validation dataset
+  # seed      ...Random seed for reproducibility
+
+  set.seed(seed)
+
+  # derivation dataset
+  data.dev <- data.frame(
+    x = rnorm(n = N.dev, mean = target_mu, sd = target_sd),
+    error = rnorm(n = N.dev, mean = 0, sd = error_sd)
+  ) %>%
+    mutate(x2 = x^2) %>%
+    mutate(lp = x + alpha * x2 + error) %>% # the linear predictor
+    mutate(p = exp(lp) / (1 + exp(lp))) # inverse-logit function, can also use plogis(lp)
+  data.dev$y <- rbinom(n = N.dev, size = 1, prob = data.dev$p)
+
+  # validation/external dataset
+  data.ext <- data.frame(
+    x = rsnorm(n = N.ext, mean = target_mu + mu_shift, sd = target_sd, xi = xi),
+    error = rnorm(n = N.ext, mean = 0, sd = error_sd)
+  ) %>%
+    mutate(x2 = x^2) %>%
+    mutate(lp = drift + slope * (x + alpha * x2) + error) %>% # the linear predictor
+    mutate(p = exp(lp) / (1 + exp(lp))) # inverse-logit function, can also use plogis(lp)
+  data.ext$y <- rbinom(n = N.ext, size = 1, prob = data.ext$p)
+
+  return(list(data.dev = data.dev, data.ext = data.ext))
+}
+```
+
+## Fit and center models
+
+1.  Two logistic regression models were then fit to the simulated derivation sample: (i) a correctly specified regression model; and (ii) an incorrectly specified regression model that omit the quadratic term (x\^2).
+
+2.  The two models were transferred into centered models using the specific steps.
+
+```{r}
+fit.center.lr <- function(data.dev, model = "correct") {
+  # -------- The original models --------
+  if (model == "correct") {
+    fit.o <- glm(y ~ x + x2, data = data.dev, family = "binomial")
+  } else {
+    fit.o <- glm(y ~ x, data = data.dev, family = "binomial")
+  }
+
+  # -------- centering: data.dev --------
+  vars_mean <- c("x", "x2")
+  # get mean values
+  means.dev <- get_mean(data.dev, vars_mean)
+  # centering vars in the data.dev dataset
+  vars_center <- names(means.dev)
+  data.dev <- step_center(data.dev, vars_center, means.dev)
+
+  # -------- The centered models --------
+  if (model == "correct") {
+    fit.c <- glm(y ~ x_C + x2_C, data = data.dev, family = "binomial")
+  } else {
+    fit.c <- glm(y ~ x_C, data = data.dev, family = "binomial")
+  }
+
+  # outcome mean
+  y_mean_dev <- mean(data.dev$y)
+  y_mean_logit_dev <- log(y_mean_dev/(1-y_mean_dev))
+  # global offset
+  offset <- coef(fit.c)[1] - y_mean_logit_dev
+
+  return(list(
+    data.dev = data.dev,
+    means.dev = means.dev,
+    fit.o = fit.o,
+    fit.c = fit.c,
+    y_mean_dev = y_mean_dev,
+    y_mean_logit_dev = y_mean_logit_dev,
+    offset = offset
+  ))
+}
+```
+
+## Transport model to the validation sample and influence of intercept shift on calibration
+
+1.  The two centered models were applied to the validation sample and recalibrated with various shifts of the intercept. Two shifts of interest:
+
+-   For linked data, update the intercept using a logistic regression with fixed slope and different intercept (**optimal shift**)
+
+-   For unlinked data, update the intercept using `Logit of outcome mean in the validation sample` + `global offset`, *i.e.,* `shift` = `Logit of outcome mean in the validation sample` - `Logit of outcome mean in the derivation sample`. (**recalibration shift**)
+
+2.  Update the model with an arbitrary intercept shift and get the corresponding calibration plot and metrics.
+
+3.  Eavg (ICI), E90, and Emax were used as the main evaluation metrics.
+
+```{r}
+recal.lr <- function(
+  data.ext,
+  means.dev,
+  fit,
+  offset,
+  vec_shift,
+  plot = FALSE
+) {
+  # -------- centering: data.ext --------
+  # centering vars in the data.ext dataset using mean values in the `data.dev` dataset
+  vars_center <- names(means.dev)
+  data.ext <- step_center(data.ext, vars_center, means.dev)
+
+  #  -------- prediction --------
+  data.ext$pred.p <- predict(fit, newdata = data.ext, type = "response")
+  data.ext$pred.logit <- predict(fit, newdata = data.ext)
+
+  # -------- recalibration --------
+  # Update model intercept to the new outcome mean
+  y_mean_ext <- mean(data.ext$y)
+  y_mean_logit_ext <- log(y_mean_ext / (1 - y_mean_ext))
+  fit.rc <- fit
+  fit.rc$coefficients[1] <- y_mean_logit_ext + offset
+  shift.rc <- fit.rc$coefficients[1] - fit$coefficients[1]
+  data.ext$pred.p.rc <- predict(fit.rc, newdata = data.ext, type = "response")
+
+  # optimal shift
+  fit.opt <- glm(
+    y ~ 1 + offset(pred.logit),
+    data = data.ext,
+    family = "binomial"
+  )
+  shift.opt <- fit.opt$coefficients[1]
+  data.ext$pred.p.opt <- predict(fit.opt, newdata = data.ext, type = "response")
+
+  # -------- calibration metrics --------
+  # the original model
+  df <- data.frame(
+    y = data.ext$y,
+    p = data.ext$pred.p,
+    logit = data.ext$pred.logit
+  )
+  plot.o <- plot.calibration(df)$plot
+
+  # the updated model
+  df_res <- data.frame()
+  pList_1 <- list()
+  pList_2 <- list()
+
+  vec_shift <- unique(c(vec_shift, 0, shift.rc, shift.opt))
+  for (i_shift in 1:length(vec_shift)) {
+    shift <- vec_shift[i_shift]
+    # update model with an intercept shift
+    fit.new <- fit
+    fit.new$coefficients[1] <- fit.new$coefficients[1] + shift
+    # prediction
+    pred.p.new <- predict(fit.new, newdata = data.ext, type = "response")
+    pred.logit.new <- predict(fit.new, newdata = data.ext)
+    # calibration
+    res.cali <- calibration(
+      pred.p.new,
+      data.ext$y,
+      package = "rms",
+      pl = FALSE
+    )
+    vec_res <- c(shift, res.cali)
+    names(vec_res)[1] <- "shift"
+    df_res <- bind_rows(df_res, vec_res)
+
+    # plot
+    if (plot) {
+      df <- data.frame(
+        y = data.ext$y,
+        p = pred.p.new,
+        logit = pred.logit.new
+      )
+      p1 <- plot.calibration(
+        df,
+        color = "red",
+        titlestr = paste0("shift = ", shift),
+        plot.o = plot.o
+      )$plot
+      pList_1[[i_shift]] <- p1
+
+      p2 <- ggplot(data, aes(pred.p.new)) +
+        geom_histogram(bins = 101, fill = "white", color = "black") +
+        theme_bw()
+      pList_2[[i_shift]] <- p2
+    }
+  }
+  df_res <- df_res %>% 
+    mutate(type_shift = case_when(
+      shift == 0 ~ "no",
+      shift == shift.rc ~ "recalibration",
+      shift == shift.opt ~ "optimal",
+      TRUE ~ "other"
+    ))
+
+  return(list(
+    df_res = df_res,
+    pList_1 = pList_1,
+    pList_2 = pList_2
+  ))
+}
+```
+
+# Run the simulation studies
+
+```{r}
+# Fixed parameters
+N.dev <- 10000
+N.ext <- 10000
+target_mu <- 0
+target_sd <- 1
+mu_shift <- 0.5
+xi <- -2
+error_sd <- 0.5
+seed <- 123
+
+# Simulated parameters
+vec_alpha <- seq(0.1, 1, by = 0.1) # default: 0.5 #
+vec_drift <- seq(-2, 2, by = 0.5) # default: 0 #
+vec_slope <- c(0.5, 0.75, 1, 1.33, 2) # default: 1 #
+grid <- expand.grid(alpha = vec_alpha, drift = vec_drift, slope = vec_slope)
+
+# Arbitrary intercept shifts
+vec_shift <- seq(-2, 2, by = 0.5)
+
+# Two types of model
+vec_model <- c("correct", "incorrect")
+
+file_name <- "Simulation 4.2 results/df_res.csv"
+if (file.exists(file_name)) {
+  df_res <- read.csv(file_name)
+} else {
+  df_res <- data.frame()
+  for (i_grid in seq_len(nrow(grid))) {
+    alpha <- grid$alpha[i_grid]
+    drift <- grid$drift[i_grid]
+    slope <- grid$slope[i_grid]
+
+    # ----------- Generate data samples -----------
+    data <- data.lr(
+      N.dev = N.dev,
+      N.ext = N.ext,
+      target_mu = target_mu,
+      target_sd = target_sd,
+      mu_shift = mu_shift,
+      xi = xi,
+      alpha = alpha,
+      error_sd = error_sd,
+      drift = drift,
+      slope = slope,
+      seed = seed
+    )
+    data.dev <- data$data.dev
+    data.ext <- data$data.ext
+    # number of cases
+    ncase.dev <- sum(data.dev$y)
+    ncase.ext <- sum(data.ext$y)
+
+    # ----------- Fit and center models -----------
+    for (i_model in vec_model) {
+      res.fit <- fit.center.lr(data.dev, i_model)
+      means.dev <- res.fit$means.dev
+      fit <- res.fit$fit.c
+      offset <- res.fit$offset
+
+      # ----------- Transport model to the validation sample & Explore different shifts -----------
+      res.recal <- recal.lr(data.ext, means.dev, fit, offset, vec_shift, plot = FALSE)
+      df_res_i <- res.recal$df_res
+      df_res_i$model <- i_model
+      df_res_i$alpha <- alpha
+      df_res_i$drift <- drift
+      df_res_i$slope <- slope
+      df_res_i$ncase.dev <- ncase.dev
+      df_res_i$ncase.ext <- ncase.ext
+
+      df_res <- bind_rows(df_res, df_res_i)
+    }
+  }
+
+  write.csv(df_res, row.names = FALSE, file = file_name)
+}
+head(df_res)
+```
+
+```{r}
+# ------------------- Plot -------------------
+df_Plot <- df_res %>% select(model, type_shift, alpha, drift, slope, shift, Eavg, E90, Emax) 
+df_Plot_long <- df_Plot %>% 
+  pivot_longer(-c(model, type_shift, alpha, drift, slope, shift), names_to = "metric", values_to = "value") %>% 
+  mutate(type_shift_2 = factor(ifelse(type_shift == "other", 1, 2)))
+df_Plot_long$metric <- factor(df_Plot_long$metric, levels = c("Eavg", "E90", "Emax"))
+df_Plot_long$type_shift <- factor(df_Plot_long$type_shift, levels = c("other", "no", "recalibration", "optimal"))
+```
+
+```{r}
+alpha_default <- 0.5
+drift_default <- 0.5
+slope_default <- 1
+
+# influence of alpha
+df_Plot_long_alpha <- df_Plot_long %>% filter(drift == drift_default, slope == slope_default) %>% droplevels()
+ggplot(df_Plot_long_alpha, aes(shift, value, shape = type_shift, color = alpha)) + 
+  geom_point(aes(size = type_shift_2))+
+  geom_line(aes(group = alpha), alpha = 0.5, linewidth = 0.5)+
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black")+
+  scale_shape_manual(values = c("other" = 16, "no" = 19, "recalibration" = 23, "optimal" = 8))+
+  scale_size_manual(values = c(1, 3))+
+  facet_wrap(model ~ metric, ncol = 3, scales = "free")+
+  theme_bw()
+
+# influence of drift
+df_Plot_long_drift <- df_Plot_long %>% filter(alpha == alpha_default, slope == slope_default) %>% droplevels()
+ggplot(df_Plot_long_drift, aes(shift, value, shape = type_shift, color = drift)) + 
+  geom_point(aes(size = type_shift_2))+
+  geom_line(aes(group = drift), alpha = 0.5, linewidth = 0.5)+
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black")+
+  scale_shape_manual(values = c("other" = 16, "no" = 19, "recalibration" = 23, "optimal" = 8))+
+  scale_size_manual(values = c(1, 3))+
+  facet_wrap(model ~ metric, ncol = 3, scales = "free")+
+  theme_bw()
+
+# influence of slope
+df_Plot_long_slope <- df_Plot_long %>% filter(alpha == alpha_default, drift == drift_default) %>% droplevels()
+ggplot(df_Plot_long_slope, aes(shift, value, shape = type_shift, color = slope)) + 
+  geom_point(aes(size = type_shift_2))+
+  geom_line(aes(group = slope), alpha = 0.5, linewidth = 0.5)+
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black")+
+  scale_shape_manual(values = c("other" = 16, "no" = 19, "recalibration" = 23, "optimal" = 8))+
+  scale_size_manual(values = c(1, 3))+
+  facet_wrap(model ~ metric, ncol = 3, scales = "free")+
+  theme_bw()
+```
+
+```{r}
+df_Plot_long_avg_correct <- df_Plot_long %>% filter(metric == "Eavg", model == "correct", drift %in% c(-2.0, -1.0, 0.0, 1.0, 2.0)) %>% droplevels()
+df_Plot_long_avg_correct$drift <- paste0("drift = ", df_Plot_long_avg_correct$drift)
+df_Plot_long_avg_correct$slope <- paste0("slope = ", df_Plot_long_avg_correct$slope)
+ggplot(df_Plot_long_avg_correct, aes(shift, value, shape = type_shift, color = alpha)) + 
+  geom_point(aes(size = type_shift_2))+
+  geom_line(aes(group = alpha), alpha = 0.5, linewidth = 0.5)+
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black")+
+  scale_shape_manual(values = c("other" = 16, "no" = 19, "recalibration" = 23, "optimal" = 8))+
+  scale_size_manual(values = c(1, 3))+
+  facet_wrap(drift ~ slope, ncol = 5, scales = "free")+
+  labs(title = "Correct model")+
+  theme_bw()
+
+df_Plot_long_avg_incorrect <- df_Plot_long %>% filter(metric == "Eavg", model == "incorrect", drift %in% c(-2.0, -1.0, 0.0, 1.0, 2.0)) %>% droplevels()
+df_Plot_long_avg_incorrect$drift <- paste0("drift = ", df_Plot_long_avg_incorrect$drift)
+df_Plot_long_avg_incorrect$slope <- paste0("slope = ", df_Plot_long_avg_incorrect$slope)
+ggplot(df_Plot_long_avg_incorrect, aes(shift, value, shape = type_shift, color = alpha)) + 
+  geom_point(aes(size = type_shift_2))+
+  geom_line(aes(group = alpha), alpha = 0.5, linewidth = 0.5)+
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black")+
+  scale_shape_manual(values = c("other" = 16, "no" = 19, "recalibration" = 23, "optimal" = 8))+
+  scale_size_manual(values = c(1, 3))+
+  facet_wrap(drift ~ slope, ncol = 5, scales = "free")+
+  labs(title = "Incorrect model")+
+  theme_bw()
+```
+
+```{r}
+
+```
