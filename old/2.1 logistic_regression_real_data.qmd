@@ -1,0 +1,452 @@
+---
+title: "Centered algorithms using real data - Logistic regression"
+author: "Juan Li"
+date: 2025-11-24
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(fastDummies) # make dummy variables
+library(rms)
+library(pROC)
+library(gtsummary)
+
+source("R/centering.R") 
+# functions in "centering.R"
+# get_rcs: implement the formula of rcs components
+# step_dummy: dummy variables
+# step_rcs: unpack the rcs components
+# step_interaction: interaction terms
+# step_center: centering
+# get_mean: get mean values
+# root.search: Root searching, not used in this .qmd file
+
+source("R/calibration.R") # for calibration plots
+```
+
+# Dataset: Heart Disease Dataset
+
+We will use the [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) dataset for the examples.
+
+About this dataset, see this \[notebook\] (https://www.kaggle.com/code/tentotheminus9/what-causes-heart-disease-explaining-the-model)
+
+1.  `age`: continuous. The person's age in years
+
+2.  `sex`: categorical. The person's sex (1 = male, 0 = female)
+
+3.  `cp`: categorical. The chest pain experienced (0: typical angina, 1: atypical angina, 2: non-anginal pain, 3: asymptomatic)
+
+4.  `trestbps`: continuous. The person's resting blood pressure (in mm Hg on admission to the hospital)
+
+5.  `chol`: continuous. The person's serum cholestoral in mg/dl
+
+6.  `fbs`: categorical. The person's fasting blood sugar (\> 120 mg/dl, 1 = true; 0 = false)
+
+7.  `restecg`: categorical. Resting electrocardiographic measurement (0 = normal, 1 = having ST-T wave abnormality, 2 = showing probable or definite left ventricular hypertrophy by Estes' criteria)
+
+8.  `thalach`: continuous. The person's maximum heart rate achieved
+
+9.  `exang`: categorical. Exercise induced angina (0 = no; 1 = yes)
+
+10. `oldpeak`: continuous. ST depression induced by exercise relative to rest ('ST' relates to positions on the ECG plot. See more here)
+
+11. `slope`: categorical. the slope of the peak exercise ST segment (0: upsloping, 1: flat, 2: downsloping)
+
+12. `ca`: The number of major vessels (0-3) colored by flourosopy
+
+13. `thal`: categorical. A blood disorder called thalassemia (1 = normal; 2 = fixed defect; 3 = reversable defect)
+
+14. `target`: Heart disease (0 = no, 1 = yes)
+
+```{r}
+data <- read.csv("data/heart.csv", stringsAsFactors = TRUE)
+dim(data) # there is no missing data in this dataset
+
+data <- data %>% mutate(thal = ifelse(thal == 0, 1, thal)) # 7 cases that thal == 0, collapse levels to 1`
+data_num <- data
+
+# categorical variables
+vars_cat <- c("sex", "cp", "fbs", "restecg", "exang", "slope", "thal")
+data[vars_cat] <- lapply(data[vars_cat], factor) 
+
+summary(data)
+
+## Barplots for all predictors
+
+df_long <- pivot_longer(
+  data_num,
+  -c(target),
+  names_to = "variable",
+  values_to = "value"
+)
+
+ggplot(df_long, aes(value, fill = factor(target))) +
+  geom_histogram() +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal()
+```
+
+## correlation
+
+```{r}
+#| fig.width: 12
+#| fig.height: 12
+
+library(corrplot)
+
+# -------- dummy variables --------
+data_cor <- step_dummy(data, vars_cat)
+
+M <- cor(data_cor %>% select(-all_of(vars_cat)))
+corrplot(M, method = 'number') 
+
+table(data %>% select(fbs, target))
+prop.table(table(data %>% select(fbs, target)), 1)
+```
+
+## Data sampling
+
+2.  `sex`: categorical. The person's sex (1 = male, 0 = female)
+
+To exaggerate the difference between development and external dataset, let's build a model on males (sex == 1) and test it on females (sex == 0).
+
+```{r}
+data.dev <- data %>% filter(sex == 1) %>% select(-sex)
+data.ext <- data %>% filter(sex == 0) %>% select(-sex)
+```
+
+```{r}
+data %>%
+  mutate(type = ifelse(fbs == 0, "data.dev", "data.ext")) %>%
+  tbl_strata(
+    strata = "type",
+    ~ .x %>%
+      tbl_summary(by = "target") %>%
+      modify_header(label = "**Variable**") %>% # update the column header
+      modify_caption("Table 1. Summary of the two datasets") %>%
+      bold_labels()
+  )
+```
+
+# Original and centered models using the `data.dev` dataset
+
+There is no easy data visualization like in `1.4 linear_regression_real_data.qmd` to suggest the nonlinear and interaction terms. For the purpose of this example, I'll just use below model.
+
+```{r}
+# The original model
+fit.o <- glm(target ~ 
+  cp + trestbps + chol + restecg + thalach + exang + ca + thal +
+  fbs * rcs(age,4) + slope * oldpeak, data = data.dev, family = "binomial")
+```
+
+```{r}
+# Get the centered variables and terms
+# -------- dummy variables --------
+vars_cat <- c("fbs", "cp", "restecg", "exang", "slope", "thal")
+data.dev <- step_dummy(data.dev, vars_cat)
+
+# -------- rcs --------
+# age
+rcs.fit <- rcs(data.dev$age, 4)
+age_knots_data.dev <- attributes(rcs.fit)$parms # knot locations
+# unpack rcs
+vars_rcs <- c("age")
+knots_list <- list(age_knots_data.dev)
+knots_list <- setNames(knots_list, vars_rcs)
+data.dev <- step_rcs(data.dev, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+interaction_list <- list(
+  c("fbs", "age"),
+  c("slope", "oldpeak")
+)
+data.dev <- step_interaction(data.dev, interaction_list)
+
+# -------- centering --------
+vars_mean <- names(data.dev)
+# get mean values
+means.dev <- get_mean(data.dev, vars_mean)
+# centering vars in the data.dev dataset
+vars_center <- names(means.dev)
+data.dev <- step_center(data.dev, vars_center, means.dev)
+```
+
+```{r}
+# The centered model on the trin dataset
+fit.c <- glm(target ~ 
+  cp_1_C + cp_2_C + cp_3_C + trestbps_C + chol_C + restecg_1_C + restecg_2_C + thalach_C + exang_1_C + ca_C + thal_2_C + thal_3_C +
+  fbs_1_C + age_rcs_1_C + age_rcs_2_C + age_rcs_3_C + slope_1_C + slope_2_C + oldpeak_C +
+  fbs_1_by_age_rcs_1_C + fbs_1_by_age_rcs_2_C + fbs_1_by_age_rcs_3_C + slope_1_by_oldpeak_C + slope_2_by_oldpeak_C, data = data.dev, family = "binomial")
+
+cbind(coef(fit.o), coef(fit.c))
+
+# outcome mean
+y_mean_dev <- mean(data.dev$target)
+y_mean_logit_dev <- log(y_mean_dev/(1-y_mean_dev))
+paste0("Mean outcome: ", y_mean_dev)
+paste0("Logit (log-odds) of the mean outcome: ", y_mean_logit_dev)
+```
+
+```{r}
+# prediction
+data.dev$prop.o <- predict(fit.o, newdata = data.dev, type = "response")
+data.dev$prop.c <- predict(fit.c, newdata = data.dev, type = "response")
+
+head(data.dev %>% select(contains("pred")))
+```
+
+# Apply the models on the `data.ext` dataset
+
+```{r}
+# Preprocess the `data.ext` dataset
+
+# -------- dummy variables --------
+data.ext <- step_dummy(data.ext, vars_cat)
+
+# -------- rcs --------
+# IMPORTANT: using the knot locations in the `data.dev` dataset
+data.ext <- step_rcs(data.ext, vars_rcs, knots_list)
+
+# -------- interaction terms --------
+data.ext <- step_interaction(data.ext, interaction_list)
+
+# -------- centering --------
+# 1. centering using the mean values in the `data.dev` dataset
+# This is for transporting the centered algorithm
+data.ext.d <- step_center(data.ext, vars_center, means.dev)
+
+# 2. centering using the mean values in the `data.ext` dataset
+# This is for recalibration
+# get mean values
+means.ext <- get_mean(data.ext, vars_mean)
+# centering vars in the data.ext dataset
+data.ext.t <- step_center(data.ext, vars_center, means.ext)
+```
+
+## Re-calibrate/Update the model in the data.ext dataset
+
+Based on `doc/Centered algorithm summary_2025-11-17.docx`, re-calibration can be done by update the outcome mean, but keep using the variable means in the **data.dev** dataset.
+
+Here we have 5 models:
+
+1.  Model_1: The original model;
+
+2.  Model_2: The centered model;
+
+3.  Model_3, **the re-calibrated model.**: treating the `data.ext` dataset as the target population (see [here](https://stats.stackexchange.com/questions/533727/logistic-regression-for-case-control-studies)), using the formula: $\beta_{corrected}=\beta+ln(\frac{\pi}{1-\pi})-ln(\frac{\bar{y}}{1-\bar{y}})$, where $\pi$ is the case prevalence in the target population.
+
+```{r}
+# Model 1
+prop.1 <- predict(fit.o, newdata = data.ext, type = "response")
+logit.1 <- predict(fit.o, newdata = data.ext)
+calibration(prop.1, data.ext$target, package = "rms")
+```
+
+```{r}
+# Model 2
+prop.2 <- predict(fit.c, newdata = data.ext.d, type = "response")
+logit.2 <- predict(fit.c, newdata = data.ext.d)
+calibration(prop.2, data.ext$target, package = "rms")
+```
+
+```{r}
+# Model 3
+# Update model intercept to the new outcome mean
+y_mean_ext <- mean(data.ext$target)
+y_mean_logit_ext <- log(y_mean_ext/(1-y_mean_ext))
+fit.c.2 <- fit.c
+fit.c.2$coefficients[1] <- fit.c$coefficients[1] - y_mean_logit_dev + y_mean_logit_ext
+shift.3 <- y_mean_logit_ext - y_mean_logit_dev
+
+prop.3 <- predict(fit.c.2, newdata = data.ext.d, type = "response")
+logit.3 <- predict(fit.c.2, newdata = data.ext.d)
+calibration(prop.3, data.ext$target, package = "rms")
+```
+
+```{r}
+recal_model <- glm(data.ext$target ~ 1 + offset(logit.1), family = binomial)
+recal_model
+prop.4 <- predict(recal_model, newdata = data.ext, type = "response")
+shift.recal <- coef(recal_model)
+calibration(prop.4, data.ext$target, package = "rms")
+```
+
+```{r}
+recal_model_2 <- glm(data.ext$target ~ logit.1, family = binomial)
+recal_model_2
+prop.5 <- predict(recal_model_2, newdata = data.ext, type = "response")
+shift.recal_2 <- coef(recal_model_2)[1]
+calibration(prop.5, data.ext$target, package = "rms")
+```
+
+# Explore different shifts
+
+From: https://www.rdocumentation.org/packages/rms/versions/8.1-0/topics/val.prob
+
+1.  Below metrics are for **discrimination**, therefore unaffected by the shift:
+
+- Dxy: Somers' Dxy, rank correlation between p and y. Dxy = 2 \* AUC - 1
+
+- C (ROC): AUC
+
+2.  Below metrics are for **goodness of fit**:
+
+- R2: Nagelkerke-Cox-Snell-Maddala-Magee R-squared index,
+
+- D, D:Chi-sq, D:p: Discrimination index
+
+- U, U:Chi-sq, U:p, Q: Unreliability index, Q is the quality index
+
+- Brier score: average squared difference in p and y
+
+3.  Below metrics are for **calibration**
+
+- Intercept, and Slope: coefficients of the logistic regression of y \~ logit. By shifting logit, slope remains the same.
+
+- Emax, Eavg, E90: maximum, average, and the 0.9 quantile of the absolute difference in predicted and loess-calibrated probabilities,
+
+- S:z, S: p: the Spiegelhalter Z-test for calibration accuracy, and its two-tailed p-value.
+
+```{r}
+res <- calibration(prop.5, data.ext$target, package = "rms", pl = FALSE)
+
+df <- data.frame(
+  y = data.ext$target,
+  p = prop.1,
+  logit = logit.1
+)
+
+# orginal model
+plot.o <- plot.calibration(df)$plot
+
+# shifted model
+c_vec <- c(seq(-3, 3, by = 0.25), shift.3, shift.recal)
+df_res <- matrix(0, nrow = length(c_vec), ncol = length(res) + 1)
+colnames(df_res) <- c("shift", names(res))
+df_res[, 1] <- c_vec
+df_res <- as.data.frame(df_res)
+
+plotList <- list()
+for (i in seq_len(length(c_vec))) {
+  c <- c_vec[i]
+  df.new <- data.frame(logit = df$logit + c, y = df$y)
+  df.new$p <- exp(df.new$logit) / (1 + exp(df.new$logit))
+
+  res <- calibration(df.new$p, df$y, package = "rms", pl = FALSE)
+  df_res[i, ] <- c(c, res)
+
+  p1 <- plot.calibration(
+    df.new,
+    color = "red",
+    titlestr = paste0("The shift c = ", c),
+    plot.o = plot.o
+  )$plot
+
+  p2 <- ggplot(df.new, aes(p)) +
+    geom_histogram(bins = 101, fill = "white", color = "black") +
+    theme_bw()
+
+  plotList[[i]] <- ggarrange(p1, p2, nrow = 2, heights = c(1, 0.5))
+}
+
+ggarrange(plotlist = plotList)
+
+df_long <- pivot_longer(
+  df_res,
+  -shift,
+  names_to = "metric",
+  values_to = "value"
+)
+
+df_long$metric <- factor(df_long$metric, levels = names(res))
+df_long <- df_long %>%
+  mutate(
+    color = case_when(
+      shift == 0 ~ "green3",
+      shift == shift.3 ~ "red",
+      shift == shift.recal ~ "orange",
+      TRUE ~ "black"
+    ),
+    size = factor(case_when(
+      shift == 0 ~ 2,
+      shift == shift.3 ~ 2,
+      shift == shift.recal ~ 2,
+      TRUE ~ 1
+    ))
+  )
+
+# results of Platt scaling
+df_5 <- data.frame(
+    shift = rep(shift.recal_2, length(res)),
+    metric = names(res),
+    value = res
+  )
+df_5$metric <- factor(df_5$metric, levels = names(res))
+
+ggplot(df_long, aes(shift, value)) +
+  geom_line() +
+  geom_point(aes(size = size, color = color)) +
+  geom_point(data = df_5, size = 5, color = "blue", shape = "\u2605") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_size_manual(values = c(1, 2)) +
+  scale_color_manual(
+    name = "",
+    values = c("black", "green3", "orange", "red"),
+    labels = c(
+      "Random shift",
+      "Original model: shift = 0",
+      "Shift by glm with offset",
+      "Shift by recalibration"
+    )
+  ) +
+  facet_wrap(~metric, scales = "free") +
+  theme_minimal() +
+  guides(size = "none") +
+  theme(legend.position = "bottom")
+
+df_long_c <- df_long %>%
+  filter(
+    metric %in% c("Intercept", "Emax", "Eavg", "E90", "S:z", "S:p")
+  )
+df_5_c <- df_5 %>%
+  filter(
+    metric %in% c("Intercept", "Emax", "Eavg", "E90", "S:z", "S:p")
+  )
+ggplot(df_long_c, aes(shift, value)) +
+  geom_line() +
+  geom_point(aes(size = size, color = color)) +
+  geom_point(data = df_5_c, size = 5, color = "blue", shape = "\u2605") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_size_manual(values = c(1, 2)) +
+  scale_color_manual(
+    name = "",
+    values = c("black", "green3", "orange", "red"),
+    labels = c(
+      "Random shift",
+      "Original model: shift = 0",
+      "Shift by glm with offset",
+      "Shift by recalibration"
+    )
+  ) +
+  facet_wrap(~metric, scales = "free") +
+  theme_minimal() +
+  guides(size = "none") +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+
+```

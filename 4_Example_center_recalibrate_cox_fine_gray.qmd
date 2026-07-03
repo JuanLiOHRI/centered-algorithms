@@ -1,0 +1,274 @@
+---
+title: "Examples of the proper center and recalibrate pipeline: fine gray, using `survival::finegray` and `survival::coxph`"
+author: "Juan Li"
+date: 2026-06-18
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(CalibrationCurves)
+library(survival)
+library(ggsurvfit)
+library(gtsummary)
+
+# Proper centering of the original model, with sufficient but light-weighted model outputs
+source("R/center_fit.R", echo = FALSE) 
+# Predicting on the centered model
+source("R/center_predict.R", echo = FALSE) 
+# Recalibrating the centered model using summary stats in a `newdata`
+source("R/center_recalibrate.R", echo = FALSE) 
+```
+
+# Monoclonal gammopathy data
+
+See `?survival::mgus2`. A data frame with 1384 observations on the following 10 variables.
+
+`id`: subject identifier
+
+`age`: age at diagnosis, in years
+
+`sex`: a factor with levels F M
+
+`dxyr`: year of diagnosis
+
+`hgb`: hemoglobin
+
+`creat`: creatinine
+
+`mspike`: size of the monoclonal serum splike
+
+`ptime`: time until progression to a plasma cell malignancy (PCM) or last contact, in months
+
+`pstat`: occurrence of PCM: 0=no, 1=yes (**event of interest**)
+
+`futime`: time until death or last contact, in months
+
+`death`: occurrence of death: 0=no, 1=yes (**competing risk**)
+
+```{r}
+data <- mgus2
+# remove rows with missing
+data <- data[complete.cases(data), ]
+
+# data split: to extragrate the difference between `original` and `target`
+original <- data %>% filter(sex == "M") %>% select(-sex, -id)
+summary(original)
+target <- data %>% filter(sex == "F") %>% select(-sex, -id)
+summary(target)
+```
+
+Cumulative incidence for competing risks, see [here](https://www.emilyzabor.com/survival-analysis-in-r.html#part-3-competing-risks)
+
+```{r}
+# Prepare dataset and event variable:
+# 0 = censor, 1 = pcm (event of interest), 2 = death (competing risk)
+etime <- with(data, ifelse(pstat == 0, futime, ptime))
+event <- with(data, ifelse(pstat == 0, 2 * death, 1))
+event <- factor(event, 0:2)
+data$time <- etime
+data$status <- event
+
+library(tidycmprsk)
+cuminc(Surv(time, status) ~ 1, data = data %>% filter(sex == "M")) %>% 
+  ggcuminc(outcome = c("1", "2")) + 
+  ylim(c(0, 1)) + 
+  labs(
+    x = "Days",
+    title = "original: male"
+  ) + 
+  add_confidence_interval() 
+
+cuminc(Surv(time, status) ~ 1, data = data %>% filter(sex == "F")) %>% 
+  ggcuminc(outcome = c("1", "2")) + 
+  ylim(c(0, 1)) + 
+  labs(
+    x = "Days",
+    title = "target: female"
+  ) + 
+  add_confidence_interval() 
+```
+
+# Centering
+
+## Fitting the centered model
+
+With `survival::finegray` and `survival::coxph`, internal centering is implemented for fine-gray models. **HOWEVER,** the mean values here are of the expanded dataset, `original_fg`, that is created by `survival::finegray`; instead of the original `original` dataset. **Therefore, mannually centering with the appropriate mean values is required.**
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# The original model without centering
+options(scipen = 999)
+
+# Prepare dataset and event variable:
+# 0 = censor, 1 = pcm (event of interest), 2 = death (competing risk)
+original <- original %>% 
+  mutate(etime = ifelse(pstat == 0, futime, ptime),
+  event = ifelse(pstat == 0, 2 * death, 1)) 
+# Fine-Gray model requires a multi-state survival, need to make it a factor
+original$event <- factor(original$event)
+
+# Create the Fine-Gray weighted dataset
+original_fg <- finegray(Surv(etime, event) ~ ., data = original)
+
+# Fit the weighted Cox model on the Fine-Gray data
+fit.o <- coxph(Surv(fgstart, fgstop, fgstatus) ~ hgb + poly(creat, 2, raw = TRUE) + mspike * rcs(age,3), 
+  # using the Fine-Gray weighted dataset
+  data = original_fg, weight = fgwt,
+  # make the model most light-weighted and meet requirements of the secured environment
+  model = FALSE, x = FALSE, y = FALSE,
+  # also center on dummy variables
+  nocenter = NULL)
+```
+
+**Note:** For fine-gray models, `center_fit` need to use both `original` and `original_fg`. What the function does is:
+
+1.  Manually center using mean values of `original` instead `original_fg`
+
+2.  Store all model outputs to the returned `centerList`.
+
+3.  Unlike in the linear/logistic regression models, "outcome mean" for survival models (cox, fine-gray) is the average probability of having the event at a specific time (`times`) based on the null model (based on the Kaplan-Meier or Aalen-Johansen estimator). **Note:** I made the decision here to pre-specify `times` instead of outputting the whole `survfit` result, that to make the model output light-weighted.
+
+4.  For fine-gray: the current implementation is using
+
+```{r}
+# Time points for calibration and recalibration
+times <- c(100, 200, 300)
+
+# The centered model: note here using `original_fg` instead of `original`
+centerList <- center_fit(fit.o, data = original, times = times, data_fg = original_fg)
+
+# object of the centered model
+fit.c <- centerList$fit.c
+```
+
+```{r}
+# Manually compute the shift
+print("Term means: ")
+(means <- fit.o.c$means) # verify all terms have been centered
+print("Model coefficients: ")
+(coef <- fit.o.c$coefficients)
+shift <- coef %*% means
+
+# baseline hazard with centering, i.e., the reference is a subject with all average covariates.
+fit.o.c.h0 <- basehaz(fit.o.c) 
+# baseline hazard without centering, i.e., the reference is a subject with all 0 covariates.
+fit.o.c.h0.nc <- basehaz(fit.o.c, centered = FALSE) 
+
+# Check: exp(shift) should equal to fit.o.c.h0$hazard/fit.o.c.h0.nc$hazard
+print(paste("Exp of the shift: ", exp(shift)))
+cbind(head(fit.o.c.h0$hazard), head(fit.o.c.h0.nc$hazard), head(fit.o.c.h0$hazard / fit.o.c.h0.nc$hazard))
+```
+
+## model outputs: Verify that the two methods produce the same model output
+
+```{r}
+# check: coefficients of the three models are identical
+cbind(coef(fit.o.c), coef(fit.o), coef(fit.c))
+```
+
+```{r}
+print("Method 1:")
+print("Mean values of all terms")
+fit.o.c$means
+
+print("knot locations")
+attr(fit.o.c$terms, "predvars")
+```
+
+```{r}
+print("Method 2:")
+print("Mean values of all terms")
+centerList$vec_mean
+
+print("knot locations")
+centerList$rcsList
+```
+
+```{r}
+fit.o.c.h0 <- basehaz(fit.o.c) 
+fit.c.ho <- basehaz(fit.c) 
+print("baseline hazard")
+head(cbind(fit.o.c.h0$hazard, fit.c.ho$hazard))
+```
+
+**Note:** From the identical term mean values, it is verified that the `coxph` function also follows *transfer then center*.
+
+```{r}
+cbind(fit.o.c$means, centerList$vec_mean, fit.o.c$means - centerList$vec_mean)
+```
+
+## Transport the centered model to a new dataset
+
+**Note:** For prediction, we don't need to prepare the data using `survival::finegray`, which makes sense since only the predictors are required in `newdata`.
+
+```{r}
+timeHorizon <- 300
+# -------- Methods 1 -------- 
+pred.m1.lp <- predict(fit.o.c, newdata = target, type = "lp")
+pred.m1.risk <- predict(fit.o.c, newdata = target, type = "risk")
+surv.fit <- survfit(fit.o.c, newdata = target)
+pred.m1.survival <- t(summary(surv.fit, times = timeHorizon)$surv)
+pred.m1.prob <- 1 - pred.m1.survival # CIF of the main event
+head(cbind(pred.m1.lp, pred.m1.risk, pred.m1.survival, pred.m1.prob))
+
+# -------- Methods 2 -------- 
+pred.m2.lp <- center_predict(centerList, newdata = target, type = "lp")
+pred.m2.risk <- center_predict(centerList, newdata = target, type = "risk")
+pred.m2.survival <- center_predict(centerList, newdata = target, type = "survival", times = timeHorizon)
+pred.m2.prob <- center_predict(centerList, newdata = target, type = "probability", times = timeHorizon)
+head(cbind(pred.m2.lp, pred.m2.risk, pred.m2.survival, pred.m2.prob))
+```
+
+# Re-calibration
+
+**Work in Progress** Recalibration of the fine-gray model requires some discussion before the implimentation.
+
+# Calibration plots
+
+```{r}
+source("R/calibration.surv.R", echo = FALSE) # Modified function for cox models
+```
+
+```{r}
+res.2 <- calibration.cox(
+  centerList,
+  newdata = target_fg,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+
+target_fg$pred.lp <- predict(fit.o.c, newdata = target_fg, type = "lp")
+argzConc <- alist(data = target_fg, reverse = TRUE)
+argzConc$obj <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ pred.lp") #argzConc$obj = update(fit$formula, "~ - . + LP")
+HarrellC <- do.call("concordance", argzConc)
+```
+
+# Trick in testing: loading defalut values of a function into the global environment
+
+```{r}
+# 1. Safely extract all arguments from the function
+vars <- formals(valProbSurvival.fg)
+
+# 2. Drop required arguments (like fit and valdata) that lack a default value
+defaults_only <- vars[sapply(vars, function(x) !is.symbol(x) && x != "")]
+
+# 3. Unpack the actual default values into your Global Environment
+list2env(defaults_only, envir = .GlobalEnv)
+```
+
+```{r}
+
+```

@@ -125,3 +125,119 @@ compare <- function(data, sd_noise, seed) {
 
   return(res)
 }
+
+# ========================================================================
+#' Recreate the calibration plot from `rms::val.prob` for visualizing
+#' the influence of different intercept shift on model calibration
+#'
+#' @param df  The dataframe with `y` , `p`, and `logit` columns.
+#' @param color The color of the calibration curve.
+#' @param titlestr The plot title.
+#' @param plot.o Calibration curve of the original model
+#' @return     A plot object
+#' @export
+plot.calibration <- function(
+  df,
+  color = "black",
+  titlestr = "Calibration Plot",
+  plot.o = NULL
+) {
+  # Logistic calibration
+  fit <- glm(y ~ logit, data = df, family = binomial)
+  df$lc <- predict(fit, newdata = df, type = "response")
+  # Nonparametric (loess)
+  df$Sm.x <- lowess(df$p, df$y, iter = 0)$x
+  df$Sm.y <- lowess(df$p, df$y, iter = 0)$y
+
+  # Plot
+  df_Diag <- data.frame(x = seq(0, 1, 0.1), y = seq(0, 1, 0.1))
+  if (!is.null(plot.o)) {
+    plot <- plot.o +
+      geom_line(data = df, aes(p, lc), color = color) +
+      geom_line(
+        data = df,
+        aes(Sm.x, Sm.y),
+        linetype = "dashed",
+        color = color
+      ) +
+      theme_bw() +
+      labs(title = titlestr)
+  } else {
+    plot <- ggplot(df, aes(p, lc)) +
+      geom_line(color = color) +
+      geom_line(aes(Sm.x, Sm.y), linetype = "dashed", color = color) +
+      geom_line(
+        data = df_Diag,
+        aes(x, y),
+        color = color,
+        linewidth = 2,
+        alpha = 0.1
+      ) +
+      theme_bw() +
+      labs(
+        x = "Predicted Probability",
+        y = "Observed Probability",
+        title = titlestr
+      )
+  }
+
+  return(plot)
+}
+
+# ========================================================================
+#' Recreate the calibration plot from `rms::val.prob` for visualizing
+#' the influence of different intercept shift on model calibration
+#'
+#' @param df  The dataframe with `y` , `p`, and `logit` columns.
+#' @param color The color of the calibration curve.
+#' @param titlestr The plot title.
+#' @param plot.o Calibration curve of the original model
+#' @return     A plot object
+#' @export
+plot.calibration <- function(
+  df,
+  color = "black",
+  titlestr = "Calibration Plot",
+  plot.o = NULL
+) {
+  # Logistic calibration
+  fit <- glm(y ~ logit, data = df, family = binomial)
+  df$lc <- predict(fit, newdata = df, type = "response")
+  # Nonparametric (loess)
+  df$Sm.x <- lowess(df$p, df$y, iter = 0)$x
+  df$Sm.y <- lowess(df$p, df$y, iter = 0)$y
+
+  # Plot
+  df_Diag <- data.frame(x = seq(0, 1, 0.1), y = seq(0, 1, 0.1))
+  if (!is.null(plot.o)) {
+    plot <- plot.o +
+      geom_line(data = df, aes(p, lc), color = color) +
+      geom_line(
+        data = df,
+        aes(Sm.x, Sm.y),
+        linetype = "dashed",
+        color = color
+      ) +
+      theme_bw() +
+      labs(title = titlestr)
+  } else {
+    plot <- ggplot(df, aes(p, lc)) +
+      geom_line(color = color) +
+      geom_line(aes(Sm.x, Sm.y), linetype = "dashed", color = color) +
+      geom_line(
+        data = df_Diag,
+        aes(x, y),
+        color = color,
+        linewidth = 2,
+        alpha = 0.1
+      ) +
+      theme_bw() +
+      labs(
+        x = "Predicted Probability",
+        y = "Observed Probability",
+        title = titlestr
+      )
+  }
+
+  return(plot)
+}

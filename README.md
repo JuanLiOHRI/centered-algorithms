@@ -1,85 +1,104 @@
-# Centered algorithm and (re)calibration
+# Centering, recalibrating, and calibration curves (2026-07-03)
 
-Examples and helper functions for centered algorithm and (re)calibration.
+## Introduction
 
-## Main example files
+This repo produces a pipeline for 
 
-### `1.1 linear_regression_simulated_data.qmd`
+1. Centering the following models (including __non-linear terms__: polynomial, restricted cubic spline, and interaction): 
+    - linear regression
+    - logistic regression
+    - survival models: Cox proportional hazards model, and Fine-Gray subdistribution hazard model
 
-Detailed examples and some visualizations for properly centering variables in a **linear regression** model using simulated data, variable types including:
+    In brief, the workflow is to fit the original model as usual, and then pass the fitted model object and the derivation dataset into `center_fit` to transform data and perform centering that follows the _"transform then center"_ principle.
 
-1.  Single dichotomous predictor
-2.  Single categorical predictor (after transforming it into dummy variables)
-3.  Single continuous predictor as it is
-4.  Single continuous predictor using restricted cubic spline (rcs), including introduction of rcs
-5.  Interaction of two categorical variables
-6.  Interaction of one categorical variable and one continuous variabl (no rcs)
-7.  Interaction of two continuous variables (no rcs)
-8.  Interaction of one categorical variable and one continuous variabl (with rcs)
-9.  Interaction of two continuous variables (one with rcs, one without)
-10. Interaction of two continuous variables (with rcs)
+2. Make sure the model output
+    - is most light-weighted without individual outcome or predictor data (_i.e._ `x = FALSE, y = FALSE` when fitting the models), this, to satisfy the strict privacy requirements when working in a secured environment (e.g., ICES).
+    - but is also completed that the model can be applied to and evaluated using external dataset.
+    
+    Several functions for survival models have been modified to meet these two requirements.
 
-### `1.2 linear_regression_simulated_data_recalibration.qmd`
+## Linear regression: `1_Example_center_recalibrate_linear.qmd`
 
-An example using simulated data where a linear regression model (original and the centered version) is developed using a `development dataset`, and then applied and recalibrated on a `test dataset`. **This is the main code example for doing proper centering and recalibration**, including using the helper functions in `R/util.R` and `R/calibration.R`.
+Detailed example using the [Medical Cost Personal Datasets](https://www.kaggle.com/datasets/mirichoi0218/insurance) dataset. 
 
-The following helper functions are used in this example:
+✅ __All tasks have been completed here.__
 
--   **`R/util.R`**: `step_dummy`,`step_rcs`,`step_interaction`,`get_mean`,`step_center`
--   **`R/calibration.R`**: `calibration`
+- [x] Model fitting and centering (`center_fit`, which calls `center_prepare_0` and several utility functions)
+- [x] Model transfering and predicting on the target data (`center_predict`, which calls `center_prepare`)
+- [x] Model recalibrating (both math and code are clear): updating both predicter means for centerings and outcome means as the intercept (`center_recalibrate`, which calls `center_prepare`)
+- [x] Calibration curves and metrics: may not be necessary for linear regression, but nonetheless done. (the wrapper function `calibration`, which calls `calibration.con`; and `calibration.OvsP` for the barplot of subgroups)
+- [x] Calibration results confirm that recalibration improves model performance on the target dataset.
 
-For details about these functions, see below.
+## Logistic resression: `2_Example_center_recalibrate_logistic.qmd`
 
-### `1.3 linear_regression_real_data.qmd`
+Detailed example using the [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) dataset. 
 
-An example using real data on centering and recalibration of a linear regression model.
+✅ __All tasks have been completed here.__
 
--   Dataset: [Medical Cost Personal Datasets](https://www.kaggle.com/datasets/mirichoi0218/insurance) from Kaggle. The dataset has been downloaded and stored in the `/data` folder. Please refer to the `.qmd` file for details.
--   Helper functions used: same as in the previous example.
+- [x] Model fitting and centering (`center_fit`, which calls `center_prepare_0` and several utility functions)
+- [x] Model transfering and predicting on the target data (`center_predict`, which calls `center_prepare`)
+- [x] Model recalibrating (both math and code are clear): only update the intercept by a shift `delta_recal = logit(outcome_mean_target) - logit(outcome_mean_original)` (`center_recalibrate`, which calls `center_prepare`)
+- [x] Calibration curves and metrics: (the wrapper function `calibration`, which calls `CalibrationCurves::val.prob.ci.2` or `rms::val.prob`; and `calibration.OvsP` for the barplot of subgroups)
+- [x] Calibration results confirm that recalibration improves model performance on the target dataset.
 
-### `2.1 logistic_regression_real_data.qmd`
+## Cox proportional hazards model
 
-An example using real data on centering and recalibration of a logistic regression model.
+### Notes for `survival::coxph`
 
--   Dataset: [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) from Kaggle. The dataset has been downloaded and stored in the `/data` folder. Please refer to the `.qmd` file for details.
--   Helper functions used: same as in the previous example.
--   Note to **Doug**: I have used a different way to split the data to exaggerate the difference between development and external dataset, see the last plot.
+1. In R’s `survival::coxph` function, predictors are internally mean-centered for numerical stability. However, dummy variables are not automatically centered. We can ensure that dummy variables are also centered by setting `nocenter = NULL`. Therefore, the centering pipeline (`center_fit` + `center_predict`) is not strictly required. However, it is still recommended to use these centering functions to make sure all essential information are outputted to work with the modified function below.
 
-### `3.1 Cox_real_data.qmd` 
+2. For recalibration, unlike linear and logistic regression models, the `coxph` model object (and the baseline hazard) can not be directly modified. Thus the function `center_predict` is used to implement the model shift `delta_recal`.
 
-**WORK IN PROGRESS** Please do not review it yet, I'll let you know when this is ready.
+3. The commonly-used function `CalibrationCurves::valProbSurvival` requires `x=TRUE, y=TRUE` and uses the fitted `coxph` model object. Therefore, it needs to be modified to work with the recalibrated model.
 
-An example using real data on centering and recalibration of a Cox model. 
+4. Further, the function `riskRegression::Score` called within `CalibrationCurves::valProbSurvival` for brier scores also uses the fitted `coxph` model object. For simplicity, I decides to instead modify the `survival::brier` function (again, calls the fitted `coxph` model object) to achieve almost the same results (`survival::brier` doesn't produce confidence interval).
 
--   Dataset: Breast Cancer Survival Data from Rotterdam and Germany, see `?CalibrationCurves::trainDataSurvival`. Please refer to the `.qmd` file for details.
--   Helper functions used: same as in the previous example.
+5. Calibration and recalibration of the survival model requires a __specific time point__. When working inside the secured environment, one may want to prespecify a `times` vector when running `center_fit` to collect the "outcome mean in the derivation dataset" at various time horizon, which is the event probability based on the Kaplan-Meier curve at specific time.
 
-## The `/data` folder
+### Functions modified
 
--   `data/insurance.csv`: The [Medical Cost Personal Datasets](https://www.kaggle.com/datasets/mirichoi0218/insurance) from Kaggle, see `1.3 linear_regression_real_data.qmd`.
+- [x] `survival::brier` --> `brier.cox`: calls the appropriate prediction and outcome instead of the fitted `coxph` model object 
+- [x] `CalibrationCurves::valProbSurvival` --> `valProbSurvival.2`: calls the appropriate prediction and outcome instead of the fitted `coxph` model object and __doesn't__ require the model fitted with `x=TRUE, y=TRUE`.
+- [x] `3.1_Test_new_functions_Cox.qmd` __validates the modified functions__ by comparing their outputs with the ones generated by their counterparts.
 
--   `data/heart.csv`: The [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) from Kaggle, see `2.1 logistic_regression_real_data.qmd`.
+### Example: `3_Example_center_recalibrate_cox.qmd`
 
-## The `/R` folder
+Detailed examples using the Breast Cancer Survival Data from Rotterdam and Germany (see `?CalibrationCurves::trainDataSurvival`). 
 
-Some helper functions.
+✅ __Almost all tasks have been completed here.__
 
-### `R/util.R`
+- [x] Model fitting and centering (`center_fit`, mainly to update with `nocenter = NULL` and collect some essential information about the derivation dataset. Requires `times` for outcome mean in the derication dataset)
+- [x] Model transfering and predicting on the target data (`center_predict`, which calls `center_prepare`)
+- [x] Model recalibrating (both math and code are clear): only update the intercept by a shift `delta_recal = clog_log(outcome_mean_target) - clog_log(outcome_mean_original)` (`center_recalibrate`, which calls `center_prepare`)
+- [x] Calibration curves and metrics: (the wrapper function `calibration`, which calls `valProbSurvival.2`; and `calibration.OvsP` for the barplot of subgroups)
+- [ ] From the calibration results, recalibration makes performance worse than the original model (it might be a bit overshoot) at almost all time points that tested.
 
--   `get_rcs`: Implement the formula of rcs components
--   `step_dummy`: Get dummy variables
--   `step_rcs`: Unpack the rcs components
--   `step_interaction`: Get interaction terms
--   `step_center`: Center all variables
--   `get_mean`: Get mean values
--   `get_logLik`: Get log likelihood
--   `root.search`: Root searching, not used in current examples
+## Fine-Gray subdistribution hazard model
 
-### `R/calibration.R`
+### Notes for `survival::finegray` + `survival::coxph`
 
--   `plot.calibration`: Recreate the calibration plot and summary stats from `rms::val.prob` for comparing calibration with different shifts.
--   `calibration`: A wrapper function to call different functions for calibration plots
--   `calibrationCon`: Generate calibration plot for continuous outcome (linear regression)
+1. Function `survival::finegray` creates a weighted, expanded dataset `data_fg`. Then, although `survival::coxph` with `nocenter = NULL` still does the internal centering, the mean values used are of the expanded `data_fg`, instead of the original `data` as we intended. Therefore, the centering pipeline (`center_fit` + `center_predict`) __must__ be used.
+
+2. Function `CalibrationCurves::valProbSurvival` (and the modified `valProbSurvival.2`) doesn't work with the fine-gray model. Further develpment/modification is needed.
+
+3. The alternative `riskRegression::FGR` (wrapper of `cmprsk::crr`), `riskRegression::Score`, and `riskRegression::plotCalibration` don't work with the fine-gray model fitted using the `survival` package either. In fact, there is a huge methodology difference between `survival::finegray` + `survival::coxph` vs `riskRegression::FGR`. My previous effort to make them work together led to nowhere. 
+
+    - Also, `riskRegression::FGR` has some syntax issues with `poly`, `rcs`, and interaction.
+
+    - Outputs of `survival::finegray` + `survival::coxph` and `riskRegression::FGR` are close but not identical (because the difference in their underlying methods).
+
+4. 🚧 The current plan is to further modify `valProbSurvival.2` --> `valProbSurvival.fg` (the brier function may need to be modified as well). I'll fit a simple model using the `riskRegression` functions, and use their output as the benchmark to validate the `valProbSurvival.fg` function (in `4.1_Test_new_functions_FG.qmd`).
+
+### Example: `4_Example_center_recalibrate_cox_fine_gray.qmd`
+
+Detailed examples using the Monoclonal gammopathy data (see `?survival::mgus2`).
+
+🚧 __Still Work In Progress__
+
+- [x] Model fitting and centering (`center_fit`, which calls `center_prepare_0` and several utility functions. Requires `times` for outcome mean in the derication dataset)
+- [x] Model transfering and predicting on the target data (`center_predict`, which calls `center_prepare`)
+- [?] Model recalibrating: math and code should be similar to cox but may require some modifications
+- [ ] Calibration curves and metrics
 
 ## The `/doc` folder
 

@@ -1,0 +1,296 @@
+---
+title: "Examples of the proper center and recalibrate pipeline: logistic regression"
+author: "Juan Li"
+date: 2026-06-15
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+# Proper centering of the original model, with sufficient but light-weighted model outputs
+source("R/center_fit.R", echo = FALSE) 
+# Predicting on the centered model
+source("R/center_predict.R", echo = FALSE) 
+# Recalibrating the centered model using summary stats in a `newdata`
+source("R/center_recalibrate.R", echo = FALSE) 
+```
+
+# Dataset: Heart Disease Dataset
+
+We will use the [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) dataset for the examples.
+
+About this dataset, see this \[notebook\] (https://www.kaggle.com/code/tentotheminus9/what-causes-heart-disease-explaining-the-model)
+
+1.  `age`: continuous. The person's age in years
+
+2.  `sex`: categorical. The person's sex (1 = male, 0 = female)
+
+3.  `cp`: categorical. The chest pain experienced (0: typical angina, 1: atypical angina, 2: non-anginal pain, 3: asymptomatic)
+
+4.  `trestbps`: continuous. The person's resting blood pressure (in mm Hg on admission to the hospital)
+
+5.  `chol`: continuous. The person's serum cholestoral in mg/dl
+
+6.  `fbs`: categorical. The person's fasting blood sugar (\> 120 mg/dl, 1 = true; 0 = false)
+
+7.  `restecg`: categorical. Resting electrocardiographic measurement (0 = normal, 1 = having ST-T wave abnormality, 2 = showing probable or definite left ventricular hypertrophy by Estes' criteria)
+
+8.  `thalach`: continuous. The person's maximum heart rate achieved
+
+9.  `exang`: categorical. Exercise induced angina (0 = no; 1 = yes)
+
+10. `oldpeak`: continuous. ST depression induced by exercise relative to rest ('ST' relates to positions on the ECG plot. See more here)
+
+11. `slope`: categorical. the slope of the peak exercise ST segment (0: upsloping, 1: flat, 2: downsloping)
+
+12. `ca`: The number of major vessels (0-3) colored by flourosopy
+
+13. `thal`: categorical. A blood disorder called thalassemia (1 = normal; 2 = fixed defect; 3 = reversable defect)
+
+14. `target`: Heart disease (0 = no, 1 = yes)
+
+```{r}
+data <- read.csv("data/heart.csv", stringsAsFactors = TRUE)
+dim(data) # there is no missing data in this dataset
+
+data <- data %>% mutate(thal = ifelse(thal == 0, 1, thal)) # 7 cases that thal == 0, collapse levels to 1`
+data_num <- data
+
+# categorical variables
+vars_cat <- c("sex", "cp", "fbs", "restecg", "exang", "slope", "thal")
+data[vars_cat] <- lapply(data[vars_cat], factor) 
+
+summary(data)
+```
+
+## Data sampling
+
+To exaggerate the difference between original and target dataset, let's build a model on males (sex == 1) and test it on females (sex == 0).
+
+```{r}
+original <- data %>% filter(sex == 1) %>% select(-sex)
+target <- data %>% filter(sex == 0) %>% select(-sex)
+```
+
+# Centering
+
+## Original and centered models using the `original` dataset
+
+For illustration purposes, I'll incorporate rcs, polynomials, and interaction involving rcs, which is probably not correct for this dataset.
+
+**Note:** In the current version, the pipeline only consider raw and not orthogonal polynomials, thus speficify `raw = TRUE` in the `poly` function.
+
+```{r}
+# The original model without centering
+options(scipen = 999)
+
+fit.o <- glm(target ~ 
+  cp + trestbps + chol + restecg + thalach + exang + ca + thal +
+  fbs * rcs(age, 4) + slope * poly(oldpeak, 2, raw = TRUE), data = original, family = "binomial",
+  # make sure the model is most light-weighted without the model frame, the model matrix, the response being returned
+  model = FALSE, x = FALSE, y = FALSE) 
+
+# A note that the original knot locations are recorded
+attr(fit.o$terms, "predvars")
+```
+
+```{r}
+# The centered model
+centerList <- center_fit(fit.o, original)
+
+# object of the centered model
+fit.c <- centerList$fit.c
+
+# check 
+# 1: the coefficients of the two models are identical except intercept
+cbind(coef(fit.o), coef(fit.c))
+# 2: the predicted values of the two models are identical
+cbind(head(fit.o$fitted.values), head(fit.c$fitted.values))
+```
+
+### model outputs
+
+```{r}
+print("Mean values of all terms")
+centerList$vec_mean
+
+print("Mean value of the continuous outcome")
+centerList$outcome_mean
+
+print("Knot locations")
+centerList$rcsList
+
+print("Coefficients")
+centerList$fit.c$coefficients
+```
+
+## Transport the centered model to a new dataset
+
+```{r}
+pred.c.target <- center_predict(centerList, newdata = target)
+
+# check: this produces the same predicted values as apply the original uncentered model on target
+pred.o.target <- predict(fit.o, newdata = target)
+cbind(head(pred.o.target), head(pred.c.target))
+```
+
+# Re-calibration
+
+```{r}
+recalibrateList <- center_recalibrate(centerList, newdata = target)
+fit.c.recalibrated <- recalibrateList$centerList$fit.c
+
+# check the updated coefficients
+outcome_mean_original <-  mean(original$target, na.rm = T)
+outcome_mean_target <- mean(target$target, na.rm = T)
+outcome_mean_original_logit <- log(outcome_mean_original / (1 - outcome_mean_original))
+outcome_mean_target_logit <- log(outcome_mean_target / (1 - outcome_mean_target))
+
+print(paste("Outcome mean in original: ", outcome_mean_original))
+print(paste("Outcome mean in target: ", outcome_mean_target))
+print(paste("Logit of outcome mean in original: ", outcome_mean_original_logit))
+print(paste("Logit of outcome mean in target: ", outcome_mean_target_logit))
+print(paste("Difference in logit of outcome mean: ", outcome_mean_target_logit - outcome_mean_original_logit))
+print(paste("Difference in model intercept: ", coef(fit.c.recalibrated)[1] - coef(fit.c)[1]))
+cbind(coef(fit.c), coef(fit.c.recalibrated))
+
+# check the difference between predicted linear predictors is equal to `delta_recal`
+delta_recal <- recalibrateList$delta_recal
+print(paste("Global offset by recalibration: ", delta_recal))
+pred.c.recalibrated <- center_predict(recalibrateList$centerList, newdata = target)
+cbind(head(pred.o.target), head(pred.c.target), head(pred.c.recalibrated), head(pred.c.recalibrated - pred.c.target))
+```
+
+```{r}
+# null model
+fit <- glm(target ~ 1, data = original, family = "binomial",
+  # make sure the model is most light-weighted without the model frame, the model matrix, the response being returned
+  model = FALSE, x = FALSE, y = FALSE) 
+coef(fit)
+```
+
+# Calibration plots
+
+```{r}
+source("R/calibration.R", echo = FALSE) # the wrapper function for calibration curves and metrics
+
+outcome <- target$target
+```
+
+```{r}
+# the original model without centering
+pred.o <- predict(fit.o, newdata = target, type = "response")
+calibration(pred.o, outcome, package = "rms")
+```
+
+```{r}
+# the original model with centering
+pred.c <- center_predict(centerList, newdata = target, type = "response")
+calibration(pred.c, outcome, package = "rms")
+```
+
+```{r}
+# the recalibrated centered model, which only requires outcome mean in newdata
+pred.c.recalibrated <- center_predict(recalibrateList$centerList, newdata = target, type = "response")
+calibration(pred.c.recalibrated, outcome, package = "rms")
+```
+
+```{r}
+# update intercept using offset, which requires linked individual-level newdata
+df <- data.frame(
+  outcome = outcome,
+  logit = center_predict(centerList, newdata = target)
+)
+
+fit.c.offset <- glm(outcome ~ offset(logit), data = df, family = binomial,
+  # make sure the model is most light-weighted without the model frame, the model matrix, the response being returned
+  model = FALSE, x = FALSE, y = FALSE) 
+
+pred.c.offset <- predict(fit.c.offset, newdata = df, type = "response")
+
+calibration(pred.c.offset, outcome, package = "rms")
+```
+
+```{r}
+# update intercept using Platt's calibration, which requires linked individual-level newdata
+fit.c.platt <- glm(outcome ~ logit, data = df, family = binomial,
+  # make sure the model is most light-weighted without the model frame, the model matrix, the response being returned
+  model = FALSE, x = FALSE, y = FALSE) 
+
+pred.c.platt <- predict(fit.c.platt, newdata = df, type = "response")
+
+calibration(pred.c.platt, outcome, package = "rms")
+```
+
+## Subgroup
+
+When using `CalibrationCurves::val.prob.ci.2`, it outputs the summary stats, but not plot.
+
+```{r}
+source("R/calibration.OvsP.R", echo = FALSE) # Bar plot of observed vs predicted in each subgroup
+
+prediction <- pred.c.recalibrated
+outcome <- target$target
+```
+
+### Adding a grouping variable: categorical
+
+```{r}
+#| warning: false
+#| message: false
+
+res <- calibration(prediction, outcome, group = target$fbs)
+res$stats
+
+calibration.OvsP(
+  res$stats,
+  group = target$fbs,
+  group_con = FALSE,
+  group_name = c("<= 120 mg/dl", "> 120 mg/dl"),
+  xlab = "Fasting blood sugar"
+)
+```
+
+### Adding a grouping variable: continuous
+
+```{r}
+#| warning: false
+#| message: false
+
+res <- calibration(prediction, outcome, group = target$age) # default to bin the group variable into 4 groups
+res$stats
+
+calibration.OvsP(
+  res$stats,
+  group = target$age,
+  group_con = TRUE,
+  xlab = "Age group"
+)
+```
+
+```{r}
+#| warning: false
+#| message: false
+
+res <- calibration(prediction, outcome, group = target$age, g.group=10) # parameter `g.group` control the number of groups
+res$stats
+
+calibration.OvsP(
+  res$stats,
+  group = target$age,
+  group_con = TRUE,
+  xlab = "Age group"
+)
+```
+
+```{r}
+
+```

@@ -1,0 +1,258 @@
+---
+title: "Examples of the proper center and recalibrate pipeline: linear regression"
+author: "Juan Li"
+date: 2026-06-15
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+# Proper centering of the original model, with sufficient but light-weighted model outputs
+source("R/center_fit.R", echo = FALSE) 
+# Predicting on the centered model
+source("R/center_predict.R", echo = FALSE) 
+# Recalibrating the centered model using summary stats in a `newdata`
+source("R/center_recalibrate.R", echo = FALSE) 
+```
+
+# Dataset: Medical Cost Personal Datasets
+
+We will use the [Medical Cost Personal Datasets](https://www.kaggle.com/datasets/mirichoi0218/insurance) dataset for the examples.
+
+About this dataset
+
+1.  `age`: continuous. Age of primary beneficiary, range from 18 to 64 years old.
+
+2.  `sex`: categorical. Insurance contractor gender: female, male.
+
+3.  `bmi`: continuous. Body mass index, providing an understanding of body, weights that are relatively high or low relative to height, objective index of body weight (kg / m \^ 2) using the ratio of height to weight, ideally 18.5 to 24.9. Range from 15.96 to 53.13.
+
+4.  `children`: continuous. Number of children covered by health insurance / Number of dependents. Range from 0 to 5.
+
+5.  `smoker`: categorical. Smoking status: no, yes.
+
+6.  `region`: categorical. The beneficiary's residential area in the US, northeast, southeast, southwest, northwest.
+
+7.  **Outcome**: `charges`: Individual medical costs billed by health insurance
+
+```{r}
+data <- read.csv("data/insurance.csv", stringsAsFactors = TRUE)
+dim(data) # there is no missing data in this dataset
+summary(data)
+```
+
+## Data sampling
+
+For the purpose of this example, I'll use data of the `northeast` region as original data, and transport the model to and test it on the `southeast` region.
+
+```{r}
+original <- data %>% filter(region == "northeast") %>% select(-region)
+target <- data %>% filter(region == "southeast") %>% select(-region)
+```
+
+# Centering
+
+## Original and centered models using the `original` dataset
+
+For illustration purposes, I'll incorporate rcs, polynomials, and interaction involving rcs, which is probably not correct for this dataset.
+
+**Note:** In the current version, the pipeline only consider raw and not orthogonal polynomials, thus speficify `raw = TRUE` in the `poly` function.
+
+```{r}
+# The original model without centering
+options(scipen = 999)
+
+fit.o <- lm(charges ~ 
+  poly(age, 2, raw = TRUE) + sex + children + smoker * rcs(bmi, 5), data = original,
+  # make sure the model is most light-weighted without the model frame, the model matrix, the response being returned
+  model = FALSE, x = FALSE, y = FALSE) 
+
+# A note that the original knot locations are recorded
+attr(fit.o$terms, "predvars")
+```
+
+```{r}
+# The centered model
+centerList <- center_fit(fit.o, original)
+
+# object of the centered model
+fit.c <- centerList$fit.c
+
+# check 
+# 1: the intercept of the centered model is equal to outcome mean
+# 2: the coefficients of the two models are identical except intercept
+print(paste("Outcome mean in original: ", mean(original$charges, na.rm = T)))
+cbind(coef(fit.o), coef(fit.c))
+# 3: the predicted values of the two models are identical
+cbind(head(fit.o$fitted.values), head(fit.c$fitted.values))
+```
+
+### model outputs
+
+```{r}
+print("Mean values of all terms")
+centerList$vec_mean
+
+print("Mean value of the outcome")
+centerList$outcome_mean
+
+print("Knot locations")
+centerList$rcsList
+
+print("Coefficients")
+centerList$fit.c$coefficients
+```
+
+## Transport the centered model to a new dataset
+
+```{r}
+pred.c.target <- center_predict(centerList, newdata = target)
+
+# check: this produces the same predicted values as apply the original uncentered model on target
+pred.o.target <- predict(fit.o, newdata = target)
+cbind(head(pred.o.target), head(pred.c.target))
+```
+
+# Re-calibration
+
+```{r}
+recalibrateList <- center_recalibrate(centerList, newdata = target)
+fit.c.recalibrated <- recalibrateList$centerList$fit.c
+
+# check the updated coefficients
+print(paste("Outcome mean in original: ", mean(original$charges, na.rm = T)))
+print(paste("Outcome mean in target: ", mean(target$charges, na.rm = T)))
+cbind(coef(fit.c), coef(fit.c.recalibrated))
+```
+
+```{r}
+df <- data.frame(outcome = target$charges)
+df$pred.o <- pred.o.target
+df$pred.c <- pred.c.target
+df$pred.c.recalibrated <- center_predict(recalibrateList$centerList, newdata = target)
+
+# check the difference between predicted values is equal to `delta_recal`
+delta_recal <- recalibrateList$delta_recal
+print(paste("Global offset by recalibration: ", delta_recal))
+cbind(head(df$pred.o), head(df$pred.c), head(df$pred.c.recalibrated), head(df$pred.c.recalibrated - df$pred.c))
+
+# check RMSE
+print(paste("RMSE of the original model in target: ", sqrt(mean((df$outcome - df$pred.o)^2))))
+print(paste("RMSE of the centered model in target: ", sqrt(mean((df$outcome - df$pred.c)^2))))
+print(paste("RMSE of the recalibrated model in target: ", sqrt(mean((df$outcome - df$pred.c.recalibrated)^2))))
+```
+
+# Calibration plot
+
+Calibration plot is not commonly done for linear regression, since the comparison and visualization between outcome and predicted values can be easily done and RMSE is the most often used metric. We can nonetheless still do a calibration, which can be more interesting for checking subgroups. In "R/calibration.R" I have created a wrapper function for this.
+
+## Overall
+
+```{r}
+source("R/calibration.R", echo = FALSE) # the wrapper function for calibration curves and metrics
+```
+
+```{r}
+labelPos.x <- 2000
+labelPos.y <- 53000
+
+calibration(
+  prediction = df$pred.o,
+  outcome = df$outcome,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x,
+  labelPos.y = labelPos.y
+)
+
+calibration(
+  prediction = df$pred.c,
+  outcome = df$outcome,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x,
+  labelPos.y = labelPos.y
+)
+
+calibration(
+  prediction = df$pred.c.recalibrated,
+  outcome = df$outcome,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x,
+  labelPos.y = labelPos.y
+)
+```
+
+```{r}
+# If the sample size is too large and it takes too long to plot,
+# you can plot the boxplot or violin plot instead
+
+# Boxplot
+calibration(
+  prediction = df$pred.c.recalibrated,
+  outcome = df$outcome,
+  g = 5,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x ,
+  labelPos.y = labelPos.y
+)
+
+# Violin plot
+calibration(
+  prediction = df$pred.c.recalibrated,
+  outcome = df$outcome,
+  g = 5,
+  violin = TRUE,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x ,
+  labelPos.y = labelPos.y
+)
+```
+
+## Subgroup
+
+```{r}
+source("R/calibration.OvsP.R", echo = FALSE) # Bar plot of observed vs predicted in each subgroup
+```
+
+In the current version, if we want to see the calibration for subgroups. The default is scatter plot.
+
+```{r}
+# subgroup by a categorical variable
+res <- calibration(
+  prediction = df$pred.c.recalibrated,
+  outcome = df$outcome,
+  group = target$sex,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x,
+  labelPos.y = labelPos.y
+)
+res
+
+calibration.OvsP(res, group = target$sex, group_con = FALSE, xlab = "Sex")
+```
+
+```{r}
+# subgroup by a continuous variable
+res <- calibration(
+  prediction = df$pred.c.recalibrated,
+  outcome = df$outcome,
+  group = target$age,
+  marginPlt = TRUE,
+  labelPos.x = labelPos.x,
+  labelPos.y = labelPos.y
+)
+res
+
+calibration.OvsP(res, group = target$age, group_con = TRUE, xlab = "Age group")
+```
+
+```{r}
+
+```
