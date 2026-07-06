@@ -20,6 +20,7 @@ library(survival)
 library(ggsurvfit)
 library(gtsummary)
 library(riskRegression)
+library(prodlim)
 
 # Proper centering of the original model, with sufficient but light-weighted model outputs
 source("R/center_fit.R", echo = FALSE) 
@@ -95,7 +96,7 @@ All of above can be solved with some functions to prepare the data, but I want t
 
 - `FGR` utilizes a transformation model or binomial regression on time sequences rather than estimating a traditional partial-likelihood baseline hazard. It inherently handles absolute risk regression, mapping time to the cumulative incidence of the specific event of interest.
 
-7.  *Standard Errors:* Because `finegray` manipulates the risk set size by duplicating records, you must use robust standard errors (e.g., `robust = TRUE` in `coxph`). `riskRegression::FGR` uses a pseudo-value approach that naturally handles these without needing to inflate the risk set size identically.
+7.  *Standard Errors:* Because `finegray` manipulates the risk set size by duplicating records, you must use robust standard errors (e.g., `robust = TRUE` in `coxph`, which also requires the `id` column, _i.e.,_ `id = id, robust = TRUE`). `riskRegression::FGR` uses a pseudo-value approach that naturally handles these without needing to inflate the risk set size identically.
 
 ```{r}
 # --------- The FGR model -----------
@@ -150,7 +151,7 @@ colMeans(X)
 print("Coefficients: similar but not identical")
 cbind(fit.FGR$crrFit$coef, fit.survival$coefficients)
 
-print("Predicted linear predictors: differnt by a constant due to centering")
+print("Predicted linear predictors: different by a constant due to centering")
 # `FGR`
 X <- as.matrix(data %>% select(hgb, creat, mspike, age))
 coef <- fit.FGR$crrFit$coef
@@ -161,13 +162,57 @@ print(paste0("Sum of variable means times coefficients: ", colMeans(X_fg) %*% co
 head(cbind(lp.FGR, lp.survival, lp.survival - lp.FGR))
 ```
 
-```{r}
+# Performance metrics
 
+```{r}
+# Define the time point for evaluation
+timeHorizon <- 300
+```
+
+## Brier
+
+Even with `x = TRUE, y = TRUE`, the commonly used functions have issues directly working with `fit.survival.2`:
+
+1. `survival::brier` only works with the cox model: "Error in `brier()`: ! one or more flags are >0 in survcheck".
+
+2. `riskRegression::Score`: "Error in `predictCox()`: ! predictCox does not know how to handle Cox models fitted with weights"
+
+3. `pec::pec`: "Error in `UseMethod()`: ! no applicable method for 'predictEventProb' applied to an object of class "coxph""
+
+```{r}
+# Update `fit.survival` with `x = TRUE, y = TRUE` 
+# to test if it can work with some evaluation functions
+# fit.survival.2 <- update(fit.survival, x = TRUE, y = TRUE)
 ```
 
 ```{r}
+# brier(fit.survival.2, times = timeHorizon)
+```  
+
+```{r}
+# Score(
+#   object = list("Fine-Gray" = fit.survival.2),
+#   formula = Hist(time, status_fct) ~ 1,      # Baseline formula matching your outcome format
+#   data = data,                          # Original validation data format
+#   metrics = c("brier"),           # Concordance (AUC) and Brier Score
+#   plots = "calibration",                 # Prepares calibration data
+#   cause = 1,                             # Cause of interest
+#   times = timeHorizon                    # Your arbitrary evaluation time
+# )
+```
+
+```{r}
+# pec::pec(list(FineGray = fit.survival), 
+#                data = data, 
+#                formula = Surv(time, status_fct) ~ 1, 
+#                times = timeHorizon)
+```
+
+Therefore, I modified `brier.cox` to `brier.fg` to calculate brier score for `fit.survival`, and use results of `riskRegression::Score` on `fit.FGR` as the benchmark.
+
+```{r}
 timeHorizon <- 300
-eval_results <- Score(
+eval_FGR <- Score(
   object = list("Fine-Gray" = fit.FGR),
   formula = Hist(time, status) ~ 1,      # Baseline formula matching your outcome format
   data = data,                          # Original validation data format
@@ -177,95 +222,32 @@ eval_results <- Score(
   times = timeHorizon                    # Your arbitrary evaluation time
 )
 
-# 3. Extract your requested metrics at the given time horizon
-print(eval_results)
-
-# Concordance (Time-dependent C-index / AUC)
-eval_results$AUC$score
-
 # Brier Score
-eval_results$Brier$score
+eval_FGR$Brier$score
+```
 
-# Calibration in the large
-plotCalibration(eval_results, time = timeHorizon)
+The main question here is which dataset to use, `data` or `data_fg`? This applies to both the fine-gray model and the NULL model.
+
+```{r}
+surv.fit <- survfit(fit.survival, data = data_fg)
+pred.prob <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
+fgstart <- data_fg$fgstart
+fgstop <- data_fg$fgstop
+fgstatus <- data_fg$fgstatus
+fgwt <- data_fg$fgwt
+brier.fg(pred.prob, fgstart, fgstop, fgstatus, fgwt, times = timeHorizon)
 ```
 
 ```{r}
-#| echo: false
-#| warning: false
-#| message: false
+mean(data$age)
+data$age_C <- data$age - mean(data$age)
 
-# The original model without centering
-options(scipen = 999)
-
-# Prepare dataset and event variable:
-# 0 = censor, 1 = pcm (event of interest), 2 = death (competing risk)
-etime <- with(data, ifelse(pstat == 0, futime, ptime))
-event <- with(data, ifelse(pstat == 0, 2 * death, 1))
-event <- factor(event, 0:2, labels = c("censor", "pcm", "death"))
-
-# Create the Fine-Gray weighted dataset
-data_fg <- finegray(Surv(etime, event) ~ ., data = data)
-
-# Fit the weighted Cox model on the Fine-Gray data
-fit.o.c <- coxph(Surv(fgstart, fgstop, fgstatus) ~ hgb + poly(creat, 2, raw = TRUE) + mspike * rcs(age,3), 
-  # using the Fine-Gray weighted dataset
-  data = data_fg, weight = fgwt,
-  # make the model most light-weighted and meet requirements of the secured environment
-  model = FALSE, x = FALSE, y = FALSE,
-  # also center on dummy variables
-  nocenter = NULL)
-
-fit.o.c
-fit.o.c$concordance
-concordance(fit.o.c)
-# Uno's weighting: ! n/G2 timewt option not supported for (time1, time2) data
-# concordance(fit.o.c, timewt="n/G2")  
-
-data_fg$pred.lp <- predict(fit.o.c, newdata = data_fg, type = "lp")
-argzConc <- alist(data = data_fg, reverse = TRUE)
-argzConc$obj <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ pred.lp") #argzConc$obj = update(fit$formula, "~ - . + LP")
-HarrellC <- do.call("concordance", argzConc)
+data_fg_1 <- finegray(Surv(time, status_fct) ~ age, data = data)
+mean(data_fg_1$age)
+data_fg_2 <- finegray(Surv(time, status_fct) ~ age_C, data = data)
+mean(data_fg_2$age_C)
 ```
 
-# Calibration curve and performance metrics: `riskRegression::Score` + `plotCalibration` vs `CalibrationCurves::valProbSurvival` (modified to extend to fine-gray)
-
-1.  The function `riskRegression::Score` only works with `riskRegression::FGR`, not `survival::finegray` + `survival::coxph` because the following error I ran into "! predictCox does not know how to handle Cox models fitted with weights".
-
-`CalibrationCurves::valProbSurvival`:
-
-- parametric restricted cubic splines
-
-- the calibration intercept, calibration slope, and E50/Emax metrics.
-
-- Brier and AUC
-
-  - Harrell’s C and Uno's C (censoring-independent) for Cox,
-
-  - Uno's C may not work for fine-gray (! n/G2 timewt option not supported for (time1, time2) data)
-
-`riskRegression::Score` + `plotCalibration`:
-
-- non-parametric techniques like nearest-neighbor evaluation (NNE) and quantile grouping
-
-- Brier scores and AUC
-
-See below comparison table from Gemini:
-
-| Feature | `riskRegression::plotCalibration` | `CalibrationCurves::valProbSurvival` |
-|------------------------|------------------------|------------------------|
-| Primary Models | Supports various models (Logistic, Cox, Random Forest, etc.) via the `Score` function | Specifically tailored for Cox Proportional Hazards (`coxph` objects) |
-| Censoring Handling | Uses Inverse Probability of Censoring Weighting (IPCW) and pseudo-values | Relies on the internal Harrell's `cph` logic and standard survival data structures |
-| Smoothing Methods | Uses quantile grouping or nearest neighbor estimation (nne) | Uses restricted cubic splines for smooth calibration curves |
-| Multi-model Plotting | Easily plots and compares multiple models on a single graph | Typically focuses on evaluating and visualizing one model at a time |
-
-The strategy now is to use `survival::finegray` and `survival::coxph` to fit the model, and modify `CalibrationCurves::valProbSurvival`, or, rather, the modified `valProbSurvival.2` function to make it
-
-1.  work with fine-gray models
-
-2.  not rely on the fitted model object
-
-3.  not require `x = TRUE, y = TRUE` when fitting the model.
 
 ```{r}
 

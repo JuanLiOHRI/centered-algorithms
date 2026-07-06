@@ -4,7 +4,7 @@ require(timeROC)
 require(rms) # `cph`, `survest`
 require(ggplot2)
 
-source("R/brier.cox.R", echo = FALSE) 
+source("R/brier.R", echo = FALSE) 
 
 #' Modify `CalibrationCurves::valProbSurvival` to work with recalibrated cox model.
 #'

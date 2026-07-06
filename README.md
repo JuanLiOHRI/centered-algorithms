@@ -77,17 +77,21 @@ Detailed examples using the Breast Cancer Survival Data from Rotterdam and Germa
 
 ### Notes for `survival::finegray` + `survival::coxph`
 
-1. Function `survival::finegray` creates a weighted, expanded dataset `data_fg`. Then, although `survival::coxph` with `nocenter = NULL` still does the internal centering, the mean values used are of the expanded `data_fg`, instead of the original `data` as we intended. Therefore, the centering pipeline (`center_fit` + `center_predict`) __must__ be used.
+1. Function `survival::finegray` creates a weighted, expanded dataset `data_fg`. Then, although `survival::coxph` with `nocenter = NULL` still does the internal centering, the mean values used are of the expanded `data_fg`, instead of the original `data` as we intended. __However, __
 
-2. Function `CalibrationCurves::valProbSurvival` (and the modified `valProbSurvival.2`) doesn't work with the fine-gray model. Further develpment/modification is needed.
+2. *Standard Errors:* Because `finegray` manipulates the risk set size by duplicating records, you must use robust standard errors (e.g., `robust = TRUE` in `coxph`, which also requires the `id` column, _i.e.,_ `id = id, robust = TRUE`). `riskRegression::FGR` uses a pseudo-value approach that naturally handles these without needing to inflate the risk set size identically.
 
-3. The alternative `riskRegression::FGR` (wrapper of `cmprsk::crr`), `riskRegression::Score`, and `riskRegression::plotCalibration` don't work with the fine-gray model fitted using the `survival` package either. In fact, there is a huge methodology difference between `survival::finegray` + `survival::coxph` vs `riskRegression::FGR`. My previous effort to make them work together led to nowhere. 
+3. Function `CalibrationCurves::valProbSurvival` (and the modified `valProbSurvival.2`) doesn't work with the fine-gray model. Further develpment/modification is needed.
+
+4. The alternative `riskRegression::FGR` (wrapper of `cmprsk::crr`), `riskRegression::Score`, and `riskRegression::plotCalibration` don't work with the fine-gray model fitted using the `survival` package either. In fact, there is a huge methodology difference between `survival::finegray` + `survival::coxph` vs `riskRegression::FGR`. My previous effort to make them work together led to nowhere. 
 
     - Also, `riskRegression::FGR` has some syntax issues with `poly`, `rcs`, and interaction.
 
     - Outputs of `survival::finegray` + `survival::coxph` and `riskRegression::FGR` are close but not identical (because the difference in their underlying methods).
 
-4. 🚧 The current plan is to further modify `valProbSurvival.2` --> `valProbSurvival.fg` (the brier function may need to be modified as well). I'll fit a simple model using the `riskRegression` functions, and use their output as the benchmark to validate the `valProbSurvival.fg` function (in `4.1_Test_new_functions_FG.qmd`).
+    - `FGR` does **not** natively perform internal variable centering. It internally relies on binomial regression and pseudo-values rather than partial likelihoods, the internal centering and constraint handling differ.
+
+5. 🚧 The current plan is to further modify `valProbSurvival.2` --> `valProbSurvival.fg` (the brier function may need to be modified as well). I'll fit a simple model using the `riskRegression` functions, and use their output as the benchmark to validate the `valProbSurvival.fg` function (in `4.1_Test_new_functions_FG.qmd`).
 
 ### Example: `4_Example_center_recalibrate_cox_fine_gray.qmd`
 
