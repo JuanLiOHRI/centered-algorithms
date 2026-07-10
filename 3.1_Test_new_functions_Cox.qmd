@@ -17,6 +17,7 @@ editor: visual
 
 library(CalibrationCurves)
 library(survival)
+library(survminer)
 library(ggsurvfit)
 library(gtsummary)
 library(riskRegression)
@@ -42,6 +43,33 @@ original <- trainDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2)
 target <- testDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2)
 summary(original)
 summary(target)
+```
+
+# Kaplan-Meier (KM) survival vs Baseline survival
+
+```{r}
+# -------- KM ------------
+# Basic survival fit
+fit_KM <- survfit(Surv(ryear, rfs) ~ 1, data = original)
+
+# -------- baseline survival --------
+fit.o.c <- coxph(Surv(ryear, rfs) ~ csize + cnode + grade3 + csize * rcs(pgr2,3), data = original,
+  # `riskRegression::predictRisk` and `CalibrationCurves::valProbSurvival` require `x=TRUE, y=TRUE`
+  model = FALSE, x = TRUE, y = TRUE,
+  # also center on dummy variables
+  nocenter = NULL) 
+baseline_mean <- survfit(fit.o.c)
+
+compare <- list(KM = fit_KM, baseline = baseline_mean)
+ggsurvplot_combine(
+  compare,
+  data = original,
+  conf.int = TRUE,       # Adds 95% confidence intervals
+  risk.table = TRUE,     # Displays the number of patients at risk over time
+  xlab = "Time",         # X-axis label
+  ylab = "Survival Probability", # Y-axis label
+  ggtheme = theme_minimal() # Clean minimal theme
+)
 ```
 
 # Predict event probability (`prob`) at specific times

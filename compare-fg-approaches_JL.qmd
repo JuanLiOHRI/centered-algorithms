@@ -1,0 +1,303 @@
+---
+title: "Checking custom metric functions of `survival::finegray()` + `survival::coxph()`"
+subtitle: "survival::finegray+coxph vs riskRegression::FGR"
+author: "DemPoRT V2"
+date: last-modified
+format:
+  html:
+    toc: true
+---
+
+## Overview
+
+This document compares two approaches for fitting Fine-Gray subdistribution hazard models and computing performance metrics:
+
+1. **Our current approach**: `survival::finegray()` + `survival::coxph()` with custom metric functions
+2. **Alternative approach**: `riskRegression::FGR()` + `riskRegression::Score()`
+
+Both fit the same Fine-Gray model but differ in implementation:
+
+- `coxph()` internally centers variables on the **expanded finegray dataset** means, not the original data means. This shifts the baseline hazard and therefore absolute predicted risks.
+- `riskRegression::Score()` provides published IPCW Brier and AUC implementations for competing risks; our pipeline uses custom implementations.
+
+```{r}
+library(survival)
+library(riskRegression)
+library(prodlim)
+library(dplyr)
+
+source("R/calculate-performance-metrics.R")
+```
+
+## Comparison
+
+```{r}
+data <- mgus2 # from survival
+# remove rows with missing
+data <- data[complete.cases(data), ]
+
+# Prepare dataset and event variable:
+# 0 = censor, 1 = pcm (event of interest), 2 = death (competing risk)
+# To work with `compute_c_statistic_fg` and `compute_brier_fg`, 
+# we must name the variables as `time_to_event` and `event_type`,
+# this limits the general use of these two functions outside DemPoRT
+data$time_to_event <- ifelse(data$pstat == 0, data$futime, data$ptime)
+data$event_type <- ifelse(data$pstat == 0, 2 * data$death, 1)
+
+# The time point of interest
+timeHorizon <- 300
+```
+
+### Some initial checking on the finegray + coxph model
+
+1. `coxph()` internally centers variables on the **expanded finegray dataset** means, not the original data means.
+
+2. Two versions of `compute_fg_pred_risk` produce the almost identical predicted risk.
+
+```{r}
+# --------- The finegray + coxph model -----------
+# Create the Fine-Gray weighted dataset
+data_fg <- finegray(Surv(time_to_event, factor(event_type)) ~ ., data = data, etype = 1)
+
+# Fit the weighted Cox model on the Fine-Gray data
+fit_ours <- coxph(
+  Surv(fgstart, fgstop, fgstatus) ~ hgb + creat + mspike + age, 
+  # using the Fine-Gray weighted dataset
+  data = data_fg, weight = fgwt,
+  # also center on dummy variables
+  nocenter = NULL,
+  # MUST: for robust standard errors
+  id = id, robust = TRUE,
+  # CRITICAL FOR MATCHING COEFFICIENTS with riskRegression::FGR, 
+  # still not identical (coefficients agree to ~4 decimal places)
+  ties = "breslow")
+
+# IMPORTANT: the mean values in `fit_ours` are of `data_fg` not `data`!!!
+print("Mean values in `fit_ours`: ")
+fit_ours$means
+print("Corresponding mean values in `data_fg`: ")
+X_fg <- data_fg %>% select(hgb, creat, mspike, age)
+colMeans(X_fg)
+print("Corresponding mean values in `data`: ")
+X <- data %>% select(hgb, creat, mspike, age)
+colMeans(X)
+
+# ------------ Versions of `compute_fg_pred_risk` ---------
+pred_risk_ours_old <- compute_fg_pred_risk_old(fit_ours, data, timeHorizon)
+pred_risk_ours <- compute_fg_pred_risk(fit_ours, data, timeHorizon)
+print("Versions of `compute_fg_pred_risk`: essentially the same.")
+head(cbind(pred_risk_ours_old, pred_risk_ours))
+summary(pred_risk_ours_old - pred_risk_ours)
+```
+
+### Coefficients of the finegray + coxph model vs the FGR model
+
+The two models can produce slightly different coefficients because of the different methods used on how to tie tied event times and construct the status variable, even with `ties = "breslow"` in `coxph`.
+
+```{r}
+# --------- The FGR model -----------
+fit_fgr <- FGR(
+  # Using `Hist` instead of `Surv`, only includes linear terms now
+  formula = Hist(time_to_event, event_type) ~ hgb + creat + mspike + age, 
+  data = data, 
+  # specify the event of interest
+  cause = 1
+)
+
+# ------------ Compare coefficients ---------
+print("Coefficients: similar but not identical")
+cbind(fit_ours$coefficients, fit_fgr$crrFit$coef)
+```
+
+```{r}
+# ------------ Compare predicted risk ---------
+print("Predicted risk: similar but not identical")
+# `survival`
+pred_risk_ours <- compute_fg_pred_risk(fit_ours, data, timeHorizon)
+# `riskRegression`
+pred_risk_fgr <- predictRisk(
+  object = fit_fgr,
+  newdata = data,
+  times = timeHorizon,
+  cause = 1
+)
+print(head(cbind(pred_risk_ours, pred_risk_fgr)))
+summary(pred_risk_ours - pred_risk_fgr)
+```
+
+```{r}
+# ------------ Compare predicted linear predictor ---------
+print("Predicted lp: difference due to centering")
+# `survival`
+pred_lp_ours <- predict(fit_ours, data, type = "lp")
+# `riskRegression`
+X <- as.matrix(data %>% select(hgb, creat, mspike, age))
+coef <- fit_fgr$crrFit$coef
+pred_lp_fgr <- as.vector(X %*% coef)
+print(head(cbind(pred_lp_ours, pred_lp_fgr, pred_lp_ours - pred_lp_fgr)))
+# The difference is due to centering
+X_fg <- as.matrix(data_fg %>% select(hgb, creat, mspike, age))
+print(paste0(
+  "Sum of variable means in `data_fg` times coefficients: ",
+  colMeans(X_fg) %*% coef
+))
+```
+
+```{r}
+# ------------ Compare metrics ---------
+# C-statistic (ours)
+c_ours <- compute_c_statistic_fg(fit_ours, data)
+# Brier (ours)
+brier_ours <- compute_brier_fg(pred_risk_ours, data, timeHorizon)
+
+# Score (FGR)
+eval_fgr <- Score(
+  object  = list("FGR" = fit_fgr),
+  formula = Hist(time_to_event, event_type) ~ 1,
+  data    = data,
+  metrics = c("auc", "brier"),
+  cause   = "1",
+  times   = timeHorizon,
+  se.fit  = FALSE
+)
+fgr_auc   <- as.numeric(eval_fgr$AUC$score[model == "FGR", AUC])
+fgr_brier <- as.numeric(eval_fgr$Brier$score[model == "FGR", Brier])
+fgr_brier_null <- as.numeric(eval_fgr$Brier$score[model == "Null model", Brier])
+fgr_brier_scaled <- 1 - fgr_brier / fgr_brier_null
+print("AUC: difference requires investigation")
+print(c(c_ours$c_stat, fgr_auc))
+print("Brier: slightly different")
+print(c(brier_ours$brier, fgr_brier))
+print(c(brier_ours$brier_scaled, fgr_brier_scaled))
+```
+
+```{r run-comparison}
+results <- list()
+
+for (sex in c("male", "female")) {
+  model_data <- tar_read_raw(paste0(sex, "_model_data"))
+  model_data$event_type <- factor(model_data$event_type)
+  fg_model <- tar_read_raw(paste0(sex, "_fine_and_gray_model"))
+  predictors <- names(coef(fg_model))
+
+  # Fit FGR
+  fit_fgr <- FGR(
+    as.formula(paste0("Hist(time_to_event, event_type) ~ ",
+                       paste(predictors, collapse = " + "))),
+    data = model_data, cause = "1"
+  )
+
+  # Coefficients
+  coef_ours <- coef(fg_model)
+  coef_fgr  <- fit_fgr$crrFit$coef
+  shared    <- intersect(names(coef_ours), names(coef_fgr))
+  max_coef_diff <- max(abs(as.numeric(coef_ours[shared] - coef_fgr[shared])))
+
+  # Predicted risk
+  pred_risk_ours <- compute_fg_pred_risk(fg_model, model_data, horizon)
+  pred_risk_fgr  <- as.numeric(
+    predictRisk(fit_fgr, newdata = model_data, times = horizon, cause = "1")
+  )
+
+  # C-statistic (ours)
+  c_ours <- compute_c_statistic_fg(fg_model, model_data)
+
+  # Score (FGR)
+  eval_fgr <- Score(
+    object  = list("FGR" = fit_fgr),
+    formula = Hist(time_to_event, event_type) ~ 1,
+    data    = model_data,
+    metrics = c("auc", "brier"),
+    cause   = "1",
+    times   = horizon,
+    se.fit  = FALSE
+  )
+  fgr_auc   <- as.numeric(eval_fgr$AUC$score[model == "FGR", AUC])
+  fgr_brier <- as.numeric(eval_fgr$Brier$score[model == "FGR", Brier])
+  fgr_brier_null <- as.numeric(eval_fgr$Brier$score[model == "Null model", Brier])
+  fgr_brier_scaled <- 1 - fgr_brier / fgr_brier_null
+
+  # Brier (ours)
+  brier_ours <- compute_brier_fg(pred_risk_ours, model_data, horizon)
+
+  # Calibration slope (ours)
+  cal_ours <- compute_calibration_fg(pred_risk_ours, model_data, horizon,
+                                     model_for_slope = fg_model)
+
+  # Calibration slope (FGR) — LP computed manually (crr has no predict(type="lp"))
+  lp_fgr <- as.numeric(
+    as.matrix(model_data[, names(coef_fgr), drop = FALSE]) %*% coef_fgr
+  )
+  cal_data <- model_data
+  cal_data$lp_fgr <- lp_fgr
+  fg_cal_data <- survival::finegray(
+    survival::Surv(time_to_event, factor(event_type)) ~ lp_fgr,
+    data = cal_data, etype = "1"
+  )
+  slope_model_fgr <- survival::coxph(
+    survival::Surv(fgstart, fgstop, fgstatus) ~ lp_fgr,
+    data = fg_cal_data, weights = fg_cal_data$fgwt
+  )
+  cal_slope_fgr <- as.numeric(coef(slope_model_fgr)[["lp_fgr"]])
+
+  results[[sex]] <- list(
+    c_ours = c_ours$c_stat, c_fgr = fgr_auc,
+    brier_ours = brier_ours$brier, brier_fgr = fgr_brier,
+    brier_scaled_ours = brier_ours$brier_scaled, brier_scaled_fgr = fgr_brier_scaled,
+    cal_slope_ours = cal_ours$slope, cal_slope_fgr = cal_slope_fgr,
+    pred_mean_ours = mean(pred_risk_ours), pred_mean_fgr = mean(pred_risk_fgr),
+    pred_corr = cor(pred_risk_ours, pred_risk_fgr),
+    pred_mad = mean(abs(pred_risk_ours - pred_risk_fgr)),
+    max_coef_diff = max_coef_diff,
+    mean_coef_diff = mean(abs(as.numeric(coef_ours[shared] - coef_fgr[shared])))
+  )
+
+  cat(toupper(sex), "done.\n")
+}
+```
+
+## Final Summary
+
+```{r final-summary}
+m <- results$male
+f <- results$female
+
+metrics <- data.frame(
+  Metric = c("C-statistic", "Brier score", "Brier scaled",
+             "Calibration slope", "Predicted risk (mean)"),
+  Male_Ours = c(m$c_ours, m$brier_ours, m$brier_scaled_ours,
+                m$cal_slope_ours, m$pred_mean_ours),
+  Male_FGR = c(m$c_fgr, m$brier_fgr, m$brier_scaled_fgr,
+               m$cal_slope_fgr, m$pred_mean_fgr),
+  Female_Ours = c(f$c_ours, f$brier_ours, f$brier_scaled_ours,
+                  f$cal_slope_ours, f$pred_mean_ours),
+  Female_FGR = c(f$c_fgr, f$brier_fgr, f$brier_scaled_fgr,
+                 f$cal_slope_fgr, f$pred_mean_fgr)
+)
+
+# Round numeric columns
+metrics[, 2:5] <- round(metrics[, 2:5], 6)
+
+knitr::kable(metrics, caption = "Performance metrics: finegray+coxph vs FGR")
+
+agreement <- data.frame(
+  Metric = c("Pred. risk correlation", "Pred. risk mean abs diff",
+             "Mean coef abs diff", "Max coef abs diff"),
+  Male = c(round(m$pred_corr, 6), round(m$pred_mad, 6),
+           round(m$mean_coef_diff, 6), round(m$max_coef_diff, 6)),
+  Female = c(round(f$pred_corr, 6), round(f$pred_mad, 6),
+             round(f$mean_coef_diff, 6), round(f$max_coef_diff, 6))
+)
+knitr::kable(agreement, caption = "Agreement between approaches")
+```
+
+## Interpretation
+
+| Metric | Expected | Why |
+|--------|----------|-----|
+| Coefficients | Identical | Same underlying Fine-Gray model |
+| Predicted risk | Shifted | `coxph` centers on expanded finegray data means, not original data |
+| C-statistic | Match | Rank-based, unaffected by calibration shift |
+| Brier score | Close | Depends on predicted risk shift + IPCW weighting method |
+| Brier scaled | Close | Derived from Brier, inherits any differences |
+| Calibration slope | Close | Both use LP-based secondary Fine-Gray model |

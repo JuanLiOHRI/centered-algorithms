@@ -1,0 +1,6 @@
+\contentsline {todo}{\emoji {memo} \textbf {Juan:} Add instroduction of installation in README.md.}{2}{section*.1}%
+\contentsline {todo}{\emoji {memo} \textbf {Juan:} In the repo, I implemented this using some in-house functions that follow the recipes design.}{6}{section*.2}%
+\contentsline {todo}{\emoji {memo} \textbf {Juan:} In the current repo, `prep` and `bake` are not specifically implemented. But I can see they are useful and will add them. DISCUSSION, should we create a package for this?}{6}{section*.3}%
+\contentsline {todo}{\emoji {memo} \textbf {Juan:} Fix table footnote or merge cells. May consider rendering as .docx (line number and page number issue) instead of .pdf.}{6}{section*.4}%
+\contentsline {todo}{\emoji {memo} \textbf {Doug:} acknowledgements}{10}{section*.5}%
+\contentsline {todo}{\emoji {memo} \textbf {Doug:} funding info}{10}{section*.6}%

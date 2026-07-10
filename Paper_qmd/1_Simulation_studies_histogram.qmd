@@ -1,0 +1,401 @@
+---
+title: "Simulation studies - histogram, quantiles, and non-linear terms"
+author: "Juan Li"
+date: 2026-04-13
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(dplyr) # Data manipulation
+library(tidyr) # Tidy messy data
+library(ggplot2) # Data visualization
+library(ggpubr) # ggarrange
+library(gtsummary)
+library(rms)
+library(foreach)
+library(doParallel)
+```
+
+# Simulation study 1 - histogram, quantiles, and non-linear terms
+
+In this simulation study, we will explore the extimated mean values of variour non-linear terms, using different bin-width for histogram, and different numbers of quantiles.
+
+**Histogram vs percentile:**
+
+- Histogram is to devide the range \[`min`, `max`\] into `nbin` bins, and show the frequency of occurrences within each bin, *i.e.,* same bin size/width, different frequency.
+
+- Percentile is to divide a sorted dataset into equal `nbin` parts, *i.e.,* same frequency, different bin size/width. **Note:** here we assume the quantiles always include min (0%) and max (100%)
+
+**Things to control:**
+
+- Data distribution (N = 10000): uniform, normal, skewed, double-peak
+
+- Number of bins: seq(5,200,10)
+
+- Non-linear term:
+
+  - polynomial: x\^2, x\^3
+
+  - rcs: k = 4; same distribution, different distribution
+
+**The steps are:**
+
+1.  Genarate data with different distributions. - **real data**
+
+2.  For each data, generate its histogram and quantiles using different nbins.
+
+3.  Generate data from each histogram (500 samples) and percentile (500 samples): both assume uniform distribution within each bin - **simulated data**
+
+4.  Get the mean values of each term from the **simulated data** and compare with the ones from the **real data**.
+
+```{r}
+# ------------------- Various non-linear terms and their mean values -------------------
+non.linear.mean <- function(df, knots.diff, k = 4) {
+  df$x2 <- df$x^2
+  df$x3 <- df$x^3
+  # rcs: same distribution
+  rcs.same <- rcs(df$x, k)
+  knots.same <- attributes(rcs.same)$parms
+  rcs.res.same <- get_rcs(df$x, knots.same)
+  df$rcs.2.same <- rcs.res.same[, 2]
+  df$rcs.3.same <- rcs.res.same[, 3]
+  # rcs: different distribution
+  rcs.res.diff <- get_rcs(df$x, knots.diff)
+  df$rcs.2.diff <- rcs.res.diff[, 2]
+  df$rcs.3.diff <- rcs.res.diff[, 3]
+
+  vec_mean <- colMeans(df)
+  return(vec_mean = vec_mean)
+}
+
+# ------------------- Extract rcs terms -------------------
+get_rcs <- function(vec, knots = NULL, k = 4) {
+  if (is.null(knots)) {
+    rcs.fit <- rcs(vec, k)
+  } else {
+    rcs.fit <- rcs(vec, knots)
+  }
+  # extract rcs terms
+  res <- labelled::remove_attributes(
+    rcs.fit,
+    names(attributes(rcs.fit))[3:length(names(attributes(rcs.fit)))]
+  ) # don't print the attributes
+  return(res)
+}
+
+# ------------------- Histogram and simulate data from it -------------------
+hist.simu <- function(df, nbin, vec_seed, knots.diff, nsample) {
+  k <- length(knots.diff)
+  # rcs: same distribution
+  rcs.same <- rcs(df$x, k)
+  knots.same <- attributes(rcs.same)$parms
+
+  # histogram
+  built_plot <- ggplot_build(ggplot(df, aes(x)) + geom_histogram(bins = nbin))
+  data.hist <- data.frame(
+    nbin = rep(nbin, nbin)
+  )
+  data.hist <- bind_cols(data.hist, built_plot$data[[1]][, 1:4])
+
+  # simulate data from the histogram, get non-linear terms and their mean values
+  # Parallel
+  # Determine the number of cores to use (it's best to leave one free)
+  n_cores <- parallel::detectCores() - 1
+
+  # Create and register the cluster
+  my_cluster <- makeCluster(n_cores)
+  registerDoParallel(my_cluster)
+
+  df_mean <- foreach(
+    i = 1:nsample,
+    .packages = c("ggplot2", "dplyr", "rms"),
+    .export = c(
+      "non.linear.mean",
+      "get_rcs"
+    ),
+    .combine = "rbind"
+  ) %dopar%
+    {
+      set.seed(vec_seed[i])
+      vec <- c()
+      for (j in 1:nbin) {
+        temp <- runif(
+          n = data.hist$count[j],
+          min = data.hist$xmin[j],
+          max = data.hist$xmax[j]
+        )
+        vec <- c(vec, temp)
+      }
+      data_i <- data.frame(x = vec)
+      vec_mean <- non.linear.mean(data_i, knots.diff, k)
+      return(vec_mean)
+    }
+
+  # Stop the cluster
+  stopCluster(my_cluster)
+
+  vec_025 <- apply(df_mean, 2, quantile, probs = 0.025, na.rm = TRUE)
+  vec_50 <- apply(df_mean, 2, quantile, probs = 0.5, na.rm = TRUE)
+  vec_975 <- apply(df_mean, 2, quantile, probs = 0.975, na.rm = TRUE)
+  res_mean <- data.frame(
+    term = names(vec_50),
+    nbin = rep(nbin, ncol(df_mean)),
+    mean = unname(vec_50),
+    mean.lower = unname(vec_025),
+    mean.upper = unname(vec_975)
+  )
+
+  return(list(data.hist = data.hist, res_mean = res_mean))
+}
+
+# ------------------- Quantile and simulate data from it -------------------
+quant.simu <- function(df, nbreak, vec_seed, knots.diff, nsample) {
+  k <- length(knots.diff)
+  # rcs: same distribution
+  rcs.same <- rcs(df$x, k)
+  knots.same <- attributes(rcs.same)$parms
+
+  # quantile
+  quantiles <- seq(0, 100, length.out = nbreak + 2) # including min (0%) and max (100%)
+  quant_vec <- quantile(df$x, probs = quantiles/100)
+  quantile_counts <- table(cut(df$x, breaks = quant_vec, include.lowest = TRUE))
+  data.quant <- data.frame(
+    nbreak = rep(nbreak, nbreak+2),
+    quantiles = quantiles,
+    quant_vec = unname(quant_vec)
+  )
+  nbin <- nbreak + 1
+  data.hist <- data.frame(
+    nbin = rep(nbin, nbin),
+    count = as.numeric(unname(quantile_counts)),
+    x = rep(0, nbin),
+    xmin = rep(0, nbin),
+    xmax = rep(0, nbin)
+  )
+  for (i in 1:nbin){
+    data.hist$xmin[i] <- data.quant$quant_vec[i]
+    data.hist$xmax[i] <- data.quant$quant_vec[i + 1]
+    data.hist$x[i] <- (data.hist$xmin[i] + data.hist$xmax[i]) / 2
+  }
+
+  # simulate data from the quantile, get non-linear terms and their mean values
+  # Parallel
+  # Determine the number of cores to use (it's best to leave one free)
+  n_cores <- parallel::detectCores() - 1
+
+  # Create and register the cluster
+  my_cluster <- makeCluster(n_cores)
+  registerDoParallel(my_cluster)
+
+  df_mean <- foreach(
+    i = 1:nsample,
+    .packages = c("ggplot2", "dplyr", "rms"),
+    .export = c(
+      "non.linear.mean",
+      "get_rcs"
+    ),
+    .combine = "rbind"
+  ) %dopar%
+    {
+      set.seed(vec_seed[i])
+      vec <- c()
+      for (j in 1:nbreak) {
+        temp <- runif(
+          n = data.hist$count[j],
+          min = data.hist$xmin[j],
+          max = data.hist$xmax[j]
+        )
+        vec <- c(vec, temp)
+      }
+      data_i <- data.frame(x = vec)
+      vec_mean <- non.linear.mean(data_i, knots.diff, k)
+      return(vec_mean)
+    }
+
+  # Stop the cluster
+  stopCluster(my_cluster)
+
+  vec_025 <- apply(df_mean, 2, quantile, probs = 0.025, na.rm = TRUE)
+  vec_50 <- apply(df_mean, 2, quantile, probs = 0.5, na.rm = TRUE)
+  vec_975 <- apply(df_mean, 2, quantile, probs = 0.975, na.rm = TRUE)
+  res_mean <- data.frame(
+    term = names(vec_50),
+    nbreak = rep(nbreak, ncol(df_mean)),
+    mean = unname(vec_50),
+    mean.lower = unname(vec_025),
+    mean.upper = unname(vec_975)
+  )
+
+  return(list(data.quant = data.quant, data.hist = data.hist, res_mean = res_mean))
+}
+```
+
+```{r}
+# -------------------  set up the simulation -------------------
+vec_N <- c(500) #c(500, 1000, 5000, 10000) # vector of N
+vec_type <- c("unif") #c("unif", "norm", "skew", "double") # vector of data type
+vec_nbin <- c(5) #c(5, seq(10, 100, 10)) # vector of nbin
+vec_nbin_plot <- c(5) #c(5, 20, 40, 60, 80, 100)
+# vector of random seeds
+set.seed(123)
+nsample <- 5 # 500
+vec_seed <- sample.int(1e6, nsample)
+
+# ------------------- rcs knots from a different distribution -------------------
+k <- 4 # number of knots
+dist.diff <- rbeta(n = 10000, shape1 = 2, shape2 = 10)
+rcs.diff <- rcs(dist.diff, k)
+knots.diff <- attributes(rcs.diff)$parms
+
+# ------------------- Generate data -------------------
+res_hist <- data.frame()
+res_real <- data.frame()
+for (N in vec_N) {
+  print(N)
+  file_name_hist <- paste0("Simulation_1_results/mean_hist_", N, ".csv")
+  file_name_real <- paste0("Simulation_1_results/mean_real_", N, ".csv")
+
+  if (file.exists(file_name_hist)) {
+    mean_hist <- read.csv(file_name_hist)
+    mean_real_long <- read.csv(file_name_real)
+  } else {
+    set.seed(123)
+    unif <- runif(n = N, min = 0, max = 1)
+    norm <- rnorm(n = N, mean = 5, sd = 2)
+    skew <- rbeta(n = N, shape1 = 10, shape2 = 2)
+    double <- c(
+      rnorm(n = N / 2, mean = 5, sd = 2),
+      rnorm(n = N / 2, mean = 12, sd = 2)
+    )
+    data <- data.frame(
+      type = rep(vec_type, each = N),
+      x = c(unif, norm, skew, double)
+    )
+    data$type <- factor(data$type, levels = vec_type)
+
+    # ------------------- Non-linear terms of real data -------------------
+    mean_real <- data.frame()
+    for (i_type in vec_type) {
+      data_i <- data %>%
+        filter(type == i_type) %>%
+        droplevels() %>%
+        select(-type)
+      vec_mean <- non.linear.mean(data_i, knots.diff)
+      mean_real <- bind_rows(mean_real, c("type" = i_type, vec_mean))
+    }
+    mean_real$type <- factor(mean_real$type, levels = vec_type)
+
+    mean_real_long <- mean_real %>%
+      pivot_longer(-type, names_to = "term", values_to = "mean")
+    mean_real_long$type <- factor(mean_real_long$type, levels = vec_type)
+    mean_real_long$term <- factor(
+      mean_real_long$term,
+      levels = names(mean_real)[-1]
+    )
+    mean_real_long$mean <- as.numeric(mean_real_long$mean)
+    mean_real_long$N <- rep(N, nrow(mean_real_long))
+    write.csv(mean_real_long, row.names = FALSE, file = file_name_real)
+
+    # ------------------- Generate data from histogram -------------------
+    mean_hist <- data.frame()
+    for (i_type in vec_type) {
+      data_i <- data %>%
+        filter(type == i_type) %>%
+        droplevels() %>%
+        select(-type)
+      for (nbin in vec_nbin) {
+        temp <- hist.simu(data_i, nbin, vec_seed, knots.diff, nsample)$res_mean
+        temp$type <- rep(i_type, nrow(temp))
+        mean_hist <- bind_rows(mean_hist, temp)
+      }
+    }
+    mean_hist$N <- rep(N, nrow(mean_hist))
+    mean_hist$type <- factor(mean_hist$type, levels = vec_type)
+    mean_hist$term <- factor(mean_hist$term, levels = names(mean_real)[-1])
+    write.csv(mean_hist, row.names = FALSE, file = file_name_hist)
+
+    # ------------------- Plot -------------------
+    pList <- list()
+    for (i_type in vec_type) {
+      data_i <- data %>% filter(type == i_type) %>% droplevels()
+      for (nbin in vec_nbin_plot) {
+        p <- ggplot(data_i, aes(x)) +
+          geom_histogram(
+            aes(y = ..density..),
+            bins = nbin,
+            alpha = 0.2,
+            color = "black"
+          ) +
+          geom_density(color = "red") +
+          theme_bw() +
+          labs(title = paste0("N=", N, ", ", nbin, " bins"))
+        pList[[length(pList) + 1]] <- p
+      }
+    }
+    print(ggarrange(plotlist = pList, ncol = 6, nrow = 4))
+  }
+
+  res_real <- bind_rows(res_real, mean_real_long)
+  res_hist <- bind_rows(res_hist, mean_hist)
+}
+```
+
+```{r}
+vec_term <- c()
+res_hist$term <- factor(res_hist$term, levels = unique(res_hist$term))
+res_real$term <- factor(res_real$term, levels = unique(res_real$term))
+
+# Plot
+levels(res_hist$term) <- c(
+  "x",
+  "x^2",
+  "x^3",
+  "rcs.2.same",
+  "rcs.3.same",
+  "rcs.2.diff",
+  "rcs.3.diff"
+)
+levels(res_real$term) <- c(
+  "x",
+  "x^2",
+  "x^3",
+  "rcs.2.same",
+  "rcs.3.same",
+  "rcs.2.diff",
+  "rcs.3.diff"
+)
+
+for (i_type in vec_type) {
+  p <- ggplot(
+    res_hist %>% filter(type == i_type, term != "x") %>% droplevels(),
+    aes(x = nbin, y = mean, color = factor(N))
+  ) +
+    geom_point() +
+    geom_linerange(aes(ymin = mean.lower, ymax = mean.upper)) +
+    geom_line(alpha = 0.5) +
+    geom_hline(
+      data = res_real %>% filter(type == i_type, term != "x") %>% droplevels(),
+      aes(yintercept = mean, color = factor(N)),
+      linetype = "dashed"
+    ) +
+    facet_wrap(~term, scales = "free", nrow = 3) +
+    scale_x_continuous(breaks = vec_nbin) +
+    theme_bw() +
+    labs(title = i_type, color = "N") +
+    theme(text = element_text(size = 12))
+  print(p)
+}
+```
+
+```{r}
+
+```

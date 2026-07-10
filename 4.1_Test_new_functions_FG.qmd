@@ -82,7 +82,7 @@ All of above can be solved with some functions to prepare the data, but I want t
 
 3.  `survival::finegray` creates a expanded, weighted dataset, which has more rows then the original dataset. `riskRegression::FGR` doesn't need it, but instead using a multi-level outcome variable `status`: 0 = censor, 1 = event1, 2 = event2, and then specify the event of interest using the parameter `cause`.
 
-4.  Below, I compared results from `riskRegression::FGR` vs `survival::finegray` + `coxph` and found the model coefficients were close but not identical. This is a known phenomenon and it's because the two functions use different approaches to weighting, baseline hazard handling, and ties.
+4.  Below, I compared results from `riskRegression::FGR` vs `survival::finegray` + `coxph` and found the model coefficients were close but not identical. This is a known phenomenon and it's because the two functions use different approaches to weighting, baseline hazard handling, and ties. (Using `ties = "breslow"` supposes to help with it, but still not identical.)
 
 5.  *Internal Centering*:
 
@@ -96,7 +96,7 @@ All of above can be solved with some functions to prepare the data, but I want t
 
 - `FGR` utilizes a transformation model or binomial regression on time sequences rather than estimating a traditional partial-likelihood baseline hazard. It inherently handles absolute risk regression, mapping time to the cumulative incidence of the specific event of interest.
 
-7.  *Standard Errors:* Because `finegray` manipulates the risk set size by duplicating records, you must use robust standard errors (e.g., `robust = TRUE` in `coxph`, which also requires the `id` column, _i.e.,_ `id = id, robust = TRUE`). `riskRegression::FGR` uses a pseudo-value approach that naturally handles these without needing to inflate the risk set size identically.
+7.  *Standard Errors:* Because `finegray` manipulates the risk set size by duplicating records, you must use robust standard errors (e.g., `robust = TRUE` in `coxph`, which also requires the `id` column, *i.e.,* `id = id, robust = TRUE`). `riskRegression::FGR` uses a pseudo-value approach that naturally handles these without needing to inflate the risk set size identically.
 
 ```{r}
 # --------- The FGR model -----------
@@ -133,7 +133,10 @@ fit.survival <- coxph(
   # also center on dummy variables
   nocenter = NULL,
   # MUST: for robust standard errors
-  id = id, robust = TRUE)
+  id = id, robust = TRUE,
+  # CRITICAL FOR MATCHING COEFFICIENTS with riskRegression::FGR, 
+  # still not identical (coefficients agree to ~4 decimal places)
+  ties = "breslow")
 
 # IMPORTANT: the mean values in `fit.survival` are of `data_fg` not `data`!!!
 print("Mean values in `fit.survival`: ")
@@ -152,14 +155,31 @@ print("Coefficients: similar but not identical")
 cbind(fit.FGR$crrFit$coef, fit.survival$coefficients)
 
 print("Predicted linear predictors: different by a constant due to centering")
-# `FGR`
+# `riskRegression`
 X <- as.matrix(data %>% select(hgb, creat, mspike, age))
 coef <- fit.FGR$crrFit$coef
 lp.FGR <- as.vector(X %*% coef)
 # `survival`
 lp.survival <- predict(fit.survival, newdata = data, type = "lp")
-print(paste0("Sum of variable means times coefficients: ", colMeans(X_fg) %*% coef))
+print(paste0(
+  "Sum of variable means times coefficients: ",
+  colMeans(X_fg) %*% coef
+))
 head(cbind(lp.FGR, lp.survival, lp.survival - lp.FGR))
+
+print("Predicted risk: similar but not identical")
+timeHorizon <- 300
+# `riskRegression`
+risk.FGR <- predictRisk(
+  object = fit.FGR,
+  newdata = data,
+  times = timeHorizon,
+  cause = 1
+)
+# `survival`
+surv.fit <- survfit(fit.survival, data)
+risk.survival <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
+head(cbind(risk.FGR, risk.survival))
 ```
 
 # Performance metrics
@@ -173,11 +193,11 @@ timeHorizon <- 300
 
 Even with `x = TRUE, y = TRUE`, the commonly used functions have issues directly working with `fit.survival.2`:
 
-1. `survival::brier` only works with the cox model: "Error in `brier()`: ! one or more flags are >0 in survcheck".
+1.  `survival::brier` only works with the cox model: "Error in `brier()`: ! one or more flags are \>0 in survcheck".
 
-2. `riskRegression::Score`: "Error in `predictCox()`: ! predictCox does not know how to handle Cox models fitted with weights"
+2.  `riskRegression::Score`: "Error in `predictCox()`: ! predictCox does not know how to handle Cox models fitted with weights"
 
-3. `pec::pec`: "Error in `UseMethod()`: ! no applicable method for 'predictEventProb' applied to an object of class "coxph""
+3.  `pec::pec`: "Error in `UseMethod()`: ! no applicable method for 'predictEventProb' applied to an object of class "coxph""
 
 ```{r}
 # Update `fit.survival` with `x = TRUE, y = TRUE` 
@@ -187,7 +207,7 @@ Even with `x = TRUE, y = TRUE`, the commonly used functions have issues directly
 
 ```{r}
 # brier(fit.survival.2, times = timeHorizon)
-```  
+```
 
 ```{r}
 # Score(
@@ -247,7 +267,6 @@ mean(data_fg_1$age)
 data_fg_2 <- finegray(Surv(time, status_fct) ~ age_C, data = data)
 mean(data_fg_2$age_C)
 ```
-
 
 ```{r}
 

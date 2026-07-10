@@ -1,0 +1,349 @@
+---
+title: "Centering as a Unifying Strategy for Interpretation, Implementation, and Re-calibration of Clinical Prediction Models in Generalized Linear and Additive Models"
+validate-yaml: false  # Required for Quarto 1.8+ to accept custom comments key
+date: 2026-04-13
+author:
+  - name: Juan Li
+    affiliations:
+      - name: Ottawa Hospital Research Institute
+        department: Methodological and Implementation Research Program
+        city: Ottawa
+        country: Canada
+      - name: Ottawa Hospital Research Institute
+        department: Neuroscience Program
+        city: Ottawa
+        country: Canada
+    orcid: 0000-0003-1565-2477
+    email: juli@ohri.ca
+  - name: Douglas Manuel
+    affiliations:
+      - name: Ottawa Hospital Research Institute
+        department: Methodological and Implementation Research Program
+        city: Ottawa
+        country: Canada
+    orcid: 0000-0003-0912-0845
+    email: dmanuel@ohri.ca
+  - name: Seyed Massoud Amini
+    affiliations:
+      - name: Ottawa Hospital Research Institute
+        department: Methodological and Implementation Research Program
+        city: Ottawa
+        country: Canada
+    orcid: 0000-0003-0912-0845
+    email: samini@ohri.ca
+format: 
+  pdf:
+    toc: false
+    number-sections: true
+    colorlinks: true
+    syntax-highlighting: github
+    include-in-header:
+      text: |
+        \usepackage{xcolor}
+        \usepackage{todonotes}
+        \usepackage{emoji}
+        \usepackage{lineno}
+        \linenumbers
+    include-before-body:
+      text: |
+        \listoftodos
+    abstract: |
+      **Background:** Prediction models based on generalized linear models (GLMs) and generalized additive models (GAMs) are central to modern clinical risk stratification and decision-making. Despite their ubiquity, practical deployment is frequently hampered by uninterpretable intercepts, implementation inconsistencies across software environments, and systematic miscalibration when a model is applied to a population that differs from its derivation setting. Centering predictor variables by subtracting a meaningful reference value, typically the sample mean, is a simple algebraic transformation that addresses all three challenges simultaneously, yet its unified benefits have not been formally established in the clinical prediction modelling literature. 
+  
+      **Methods:** We develop a unified centering framework covering continuous, polynomial, restricted cubic spline, and interaction terms in GLMs and GAMs, including Cox proportional-hazards models. We derive the interpretation of the centered intercept for each model family and formalise the transform-then-center preprocessing principle. We further derive closed-form re-calibration estimators that update the model intercept using only covariate summary statistics from the target population, without requiring individual patient records. Two Monte Carlo simulation studies evaluate (i) the accuracy of histogram-based approximation for estimating non-linear term means, and (ii) the calibration performance of intercept-based re-calibration relative to calibration-in-the-large and Platt scaling across logistic and Cox models under correct and mis-specified functional forms.  
+  
+      **Results:** Centering consistently yields a clinically interpretable intercept across all model families. Histogram-based mean estimation for non-linear terms converged rapidly, with relative bias below 1% for bin-to-sample ratios of 1:20 or greater. Intercept-based re-calibration using only target-population covariate means matched calibration-in-the-large under correct model specification and moderate covariate shift (mean ICI difference \< 0.002). Under misspecification, slope-correcting methods such as Platt scaling provided additional benefit when individual outcome data were available.  
+  
+      **Conclusion:** Systematic centering at the preprocessing stage unifies intercept interpretation, reduces calculator implementation complexity, and enables re-calibration from published summary statistics alone, substantially lowering the barrier to model transportability. Practical R code using the recipes framework and annotated case studies are provided.
+      
+      **Keywords:** centering, generalized additive model, generalized linear model, calibration, re-calibration, model transportability, restricted cubic splines, Platt scaling, clinical prediction model, covariate shift
+comments:
+  enabled: true
+  show_author: true
+  authors:
+    jl:
+      name: "Juan"
+      color_html: "forestgreen"
+      color_latex: "green!20"
+    dm:
+      name: "Doug"
+      color_html: "#D55E00"
+      color_latex: "orange!30"
+    ma:
+      name: "Massoud"
+      color_html: "#0072B2"
+      color_latex: "blue!20"
+bibliography: references.bib
+csl: nature.csl
+---
+
+**Resources for Quarto pdf, remove in the final version.**
+
+[PDF Options](https://quarto.org/docs/reference/formats/pdf.html)
+
+[Citations](https://quarto.org/docs/authoring/citations.html)
+
+[Tutorial](https://quarto.org/docs/get-started/authoring/text-editor.html)
+
+[Quarto comments](https://github.com/vgreg/quarto-comments) {{< todo "Add instroduction of installation in README.md." author="jl" >}}
+
+[Tables](https://quarto.org/docs/authoring/tables.html)
+
+**Two terminal commends**
+
+-   Global: `quarto install tinytex`
+
+-   In the project folder: `quarto add vgreg/quarto-comments`
+
+## Introduction {#sec-intro}
+
+Statistical prediction models have become essential tools in clinical medicine, supporting individualised risk estimation, triage, resource allocation, and shared decision-making. Generalized linear models (GLMs), introduced by Nelder and Wedderburn,[@nelder1972] and generalized additive models (GAMs), developed by Hastie and Tibshirani,[@hastie2017] remain the most widely used frameworks for this purpose owing to their interpretability, flexibility, and well-understood theoretical properties. Clinical prediction models developed from these frameworks are routinely published and subsequently deployed in settings such as geographic regions, hospital systems, and time periods that differ from the original derivation context.
+
+Three inter-related practical problems recur throughout the prediction-modelling literature. First, model intercepts as ordinarily estimated correspond to the log-odds, log-hazard, or expected outcome for a hypothetical individual whose every covariate equals zero simultaneously, a reference condition that is clinically implausible for most real predictors such as age, body mass index, or laboratory values. This makes the intercept difficult to interpret and communicate to clinical stakeholders.[@harrell2015, @steyerberg2019] Second, when a model is programmed into an online risk calculator or clinical decision-support tool, the developer must exactly reproduce the preprocessing and transformation pipeline applied at model development; minor deviations, particularly in the treatment of non-linear terms, interactions, or missing-data imputation, can produce systematically erroneous predictions.[@vancalster2019] Third, when a validated model is transported to a new population, predicted probabilities or survival estimates are often systematically mis-calibrated in the large — too high or too low for the average patient, even when discriminative performance remains acceptable.[@vancalster2016, @calibrat2019]
+
+Existing methods for correcting miscalibration (i.e., re-calibration), such as calibration-in-the-large (CITL)[@steyerberg2019] and Platt scaling,[@Platt1999] requires access to individual-level data from the target population that is linked to the outcome of interest. However, in practice, individual-level data is frequently unavailable, especially in the public health settings, due to privacy regulations, data-governance frameworks, or the fragmented nature of distributed clinical data systems.[@debray2015, @rieke2020] Further, data linkage[@Eisinger-Mathason2025] is often required to link individual-level data on predictors (e.g., from a community health survey) with their corresponding outcome of interest (e.g., diagnosis of certain disease from medical records or mortality from vital statistics registries). When such data do not exist, practitioners currently have no principled recourse beyond applying the model as developed and accepting whatever miscalibration results.
+
+All three problems can be substantially mitigated by a single, computationally trivial preprocessing step: centering each predictor by subtracting a meaningful reference value, typically the covariate mean in the derivation sample, before fitting the model. Although centering has been discussed in the regression literature primarily as a technique for reducing numerical collinearity between main effects and polynomial or interaction terms,[@harrell2015, @aiken1991multiple] its systematic and unified benefits for interpretation, implementation, and re-calibration in the context of clinical GLMs and GAMs have not been formally articulated. The present paper addresses that gap.
+
+A *generalized linear model* (GLM) relates the expected value of a response $Y$ to a linear predictor $\eta = X\beta$ through a link function $g(·)$ such that $g(\mu) = \eta$, where $\mu = E[Y|X]$.[@nelder1972] A *generalized additive model* (GAM) replaces the linear predictor with a sum $g(\mu) = \alpha + \sum_{j}f_j(x_j)$, where each $f_j$ may be a penalized regression spline or a restricted cubic spline.[@hastie2017, @harrell2015] Cox proportional-hazards models, though not strictly GLMs, share an identical linear predictor structure and are included in the present framework via the log-hazard link.[@therneau2000] In all cases, centering operates on the linear predictor and its consequences for the model intercept are the principal focus of this paper.
+
+The paper is organized as follows. Section @sec-methods presents the unified centering framework for linear, polynomial, spline, and interaction terms and derives the transformed intercept's interpretation in each model family, with a practical implementation strategy using functions that follow the design principle as the R `recipes` package.[@tidyverse] Section @sec-recalibration develops re-calibration methods for centered models, distinguishing settings where linked individual target-population data are available from those where only published summary statistics are accessible. Section @sec-simulation reports two Monte Carlo simulation studies. Section @sec-case presents applied case studies. Section @sec-discussion discusses implications, limitations, and practical recommendations. Section @sec-conclusion concludes the paper.
+
+## Centering in GLMs and GAMs: Methods and Interpretation {#sec-methods}
+
+### The Centering Transformation {#sec-methods-1}
+
+Let $x = (x_1,…,x_p)^T$ denote a $p$-dimensional covariate vector and $\bar{x} = (\bar{x}_1,...,\bar{x}_p)^T$ denote the vector of covariate means computed in the derivation sample. The uncentered linear predictor is $\eta = \alpha + \sum_{j}\beta_jx_j$. Define the centered covariate $\tilde{x}_j = x_j-\bar{x}_j$ for each $j = 1,…,p$. The centered linear predictor is then $\tilde{\eta} = \tilde{\alpha} + \sum_{j}\beta_j\tilde{x}_j$, where the transformed intercept is $\tilde{\alpha}=\alpha+\sum_{j}\beta_j\bar{x}_j$. This reparameterization is purely algebraic: the slope coefficients $β_j$ are unchanged and fitted values are identical to those from the uncentered model (*i.e.* $\tilde{\eta}=\eta$).
+
+Two key consequences of the centering transformation are that the centered intercept $\tilde{\alpha}$ is (1) equal to the mean of the linear predictor, since $E(\tilde{\eta})=\tilde{\alpha}+\sum_{j}\beta_jE(\tilde{x}_j)=\tilde{\alpha}+\sum_{j}\beta_jE(x_j-\bar{x}_j)$, which will be proven useful for model re-calibration (see Section @sec-recalibration); and (2) exactly the model's linear-predictor value for the average-covariate individual, the hypothetical patient whose every predictor equals its derivation-sample mean. Back-transformation through $g^{-1}(\cdot)$ then yields a directly interpretable baseline prediction: a probability for logistic regression, a rate for Poisson regression, or an expected outcome value for linear regression.[@steyerberg2019] @tbl-1 summarises this interpretation across the four model families considered in this paper.
+
+\scriptsize
+
+| Model | Link function $g(\mu)$ | Centered linear predictor | Interpretation of $\tilde{\alpha}$ |
+|----|----|----|----|
+| Linear regression | Identity: $\mu$ | $y=\tilde{\alpha} + \sum_{j}\beta_j(x_j-\bar{x}_j)$ | sample mean outcome |
+| Logistic regression | Logit: $ln(\frac{p}{1-p})$ | $logit(p)=\tilde{\alpha} + \sum_{j}\beta_j(x_j-\bar{x}_j)$ | log-odds at average covariates |
+| Poisson regression | Log: $ln(\lambda)$ | $ln(\lambda)=\tilde{\alpha} + \sum_{j}\beta_j(x_j-\bar{x}_j)$ | log-rate at average covariates |
+| Cox PH model | Log-hazard: $ln[h(t)]$ | $h(t)=h_0(t)exp[\sum_{j}\beta_j(x_j-\bar{x}_j)]$ | $h_0(t)$ is the baseline hazard for the average subject |
+
+: Interpretation of the centered intercept across model families {#tbl-1} {tbl-colwidths="\[20,20,30,30\]"}
+
+\normalsize
+
+### Centering Non-linear and Interaction Terms {#sec-methods-2}
+
+Centering becomes non-trivial when the linear predictor contains non-linear or interaction terms, because centering the raw covariate $x_j$ does not automatically center its transformed version $f(x_j)$. We adopt the principle of *transform-then-center*: each term is first constructed in its fully transformed form, and the resulting column is then centered by subtracting its empirical mean in the derivation sample. This principle is the direct analogue of the transform-then-impute strategy recommended in the missing-data literature,[@vanbuuren2018] and it ensures that the centering constant for each derived term is the correct empirical mean of that term, not the transformation of the raw-covariate mean, which generally differs. When empirical mean values of the non-linear and interaction terms of the derivation data are unavailable, these means can be approximated from a histogram, as described in Section @sec-recalibration-hist and examined in Section @sec-simulation-hist.
+
+#### Special case: categorical variables
+
+Although not a non-linear term, the *transform-then-center* principle also applies to the categorical variables: for variable $x_j$ with $m$ categories, it should be first transformed into $m-1$ dummy variables; then for each dummy variable, its mean represents the proportion within the derivation data that endorsed the associating category.
+
+#### Polynomial terms
+
+For a quadratic predictor with terms $x_j$ and $x_j^2$, the centering constants are $\bar{x}_j$ and $E[x_j^2] = Var(x_j) + \bar{x}_j$, computed from the derivation sample. These two constants are related but distinct; using $\bar{x}_j^2$ as an approximation for $E[x_j^2]$ introduces a systematic error equal to $Var(x_j)$. The *transform-then-center* strategy avoids this error by computing the mean of each basis column directly. The same logic extends to $x_j^3$ and higher-degree terms, where the discrepancy between $E[x_j^k]$ and $\bar{x}_j^k$ grows with moment order.[@harrell2015]
+
+#### Restricted cubic splines
+
+For variable $x_j$, restricted cubic splines (RCS) with $K$ knots placed at quantiles $\tau_1 < … < \tau_K$ yield $K-1$ basis functions, one linear (equal to $x_j$) and $K-2$ non-linear.[@harrell2015] Following Harrell's parameterisation, each non-linear basis column is a piecewise cubic polynomial of $x_j$, and its mean depends on the full distribution of $x_j$ over the interval spanned by the knots, not on $\bar{x}_j$ alone. Accordingly, each basis column must be centered separately using its empirical mean in the derivation sample.
+
+#### Interaction terms
+
+For the product term between two continuous predictors, the centering constant is $E[x_jx_k]=\bar{x}_j\bar{x}_k+Cov(x_j,x_k)=\bar{x}_j\bar{x}_k+\rho_{jk}\sigma_j\sigma_k$, where $\rho_{jk}$ is the Pearson correlation and $\sigma_j$, $\sigma_k$ are the standard deviations.[@aiken1991multiple] Ignoring the covariance term introduces a centering error proportional to $\rho_{jk}\sigma_j\sigma_k\beta_{jk}$. For a continuous-by-binary interaction $x_jd_k(d_k\in\{0,1\})$ (*i.e.*, interaction between a continuous variable and a dummy variable), the centering constant is $E[x_jd_k]=\bar{x}_{j|d_k=1}\cdot P_r(d_k=1)$, which depends on the conditional mean of $x_j$ in the exposed group. In either case, applying transform-then-center directly to the product column yields the correct centering constant automatically, without requiring explicit calculation of covariances or conditional means.
+
+### Implementation in R Using the recipes Framework {#sec-methods-3}
+
+The `recipes` package in R[@tidyverse] {{< todo "In the repo, I implemented this using some in-house functions that follow the recipes design." author="jl" >}} provides a reproducible data-preprocessing pipeline that naturally supports the *transform-then-center* principle. The critical functions are `step_dummy()` (categorical encoding), `step_rcs()` (RCS basis columns), `step_poly()` (polynomial terms), `step_interact()` (product terms), and `step_center()` (derivation-sample mean subtraction). The order is mandatory: `step_interact()` must follow all transformation steps on individual variables, then `step_center()` must follow all transformation steps.
+
+Two properties of the `recipes` workflow are critical for reproducibility. First, `prep()` {{\< todo "In the current repo, `prep` and `bake` are not specifically implemented. But I can see they are useful and will add them. DISCUSSION, should we create a package for this?" author="jl" \>}} computes all centering constants from the derivation data exclusively; when the recipe is applied to new data via `bake()`, derivation-sample means are used, not recomputed from the new data. This is essential for correct out-of-sample prediction.[@vancalster2019] Second, the centering constants stored in the prepared recipe object are part of the model's transportable specification and must be reported alongside coefficients and knot locations for any downstream user to reproduce the model exactly (@tbl-2).{{< todo "Fix table footnote or merge cells. May consider rendering as .docx (line number and page number issue) instead of .pdf." author="jl" >}}
+
+\scriptsize
+
+| Component | Required for implementation | Required for re-calibration |
+|----|:--:|:--:|
+| Link function $g(·)$ | Yes | Yes |
+| Intercept of the centered model $\tilde{\alpha}$ | Yes | Yes |
+| Model coefficients ($\beta$ of all transformed terms) | Yes | Yes |
+| Centering constants (means of all transformed terms) | Yes | Yes |
+| Knot locations (for RCS terms) | Yes | Yes |
+| Outcome mean in derivation sample ($\bar{y}$, $\bar{p}$, or $\bar{\lambda}$) | No | Yes (for intercept updating) |
+| Covariance or correlation + standard deviation of predictors[^1] | Yes | Yes |
+| Histogram or frequency table of continuous predictors[^2] | Yes | Yes |
+
+: Information required for model implementation and re-calibration {#tbl-2} {tbl-colwidths="\[55,20,25\]"}
+
+[^1]: Only required if mean value of the corresponding interaction term was not available.
+
+[^2]: Only required if mean values of the corresponding variable and its transformed terms (if appplicable) was not available.
+
+\normalsize
+
+### Benefits for Online Calculator Implementation {#sec-methods-4}
+
+Centering yields a practically important benefit for sequential online calculators and clinical decision-support tools, in which predictors are entered one at a time. In an uncentered model, when a predictor has not yet been entered and must be assigned a default, assigning zero produces a clinically implausible and often numerically extreme partial prediction. In a centered model, the natural default for any unentered predictor is its mean, precisely the value subtracted during centering, so the partial prediction at any stage reflects the model's estimate for an average patient on all unanswered variables.
+
+## Re-calibration in Centered Models {#sec-recalibration}
+
+### The Calibration Problem in Model Transportation {#sec-recalibration-1}
+
+When a prediction model is applied to a new target population, systematic miscalibration may arise from differences in case-mix, outcome prevalence, covariate distributions, or coding conventions.[@vancalster2019,@vancalster2016] Van Calster *et al.*[@vancalster2019] defined a calibration hierarchy distinguishing calibration-in-the-large (mean predicted probability equals mean observed probability), calibration slope (the regression of observed on predicted equals unity), and more refined notions of moderate and strong calibration. Miscalibration in the large is the most prevalent form encountered in external validation studies[@vancalster2016] and is the primary target of the re-calibration framework developed in this section.
+
+As mentioned in Section @sec-methods-1, $\tilde{\alpha}$ is equal to the mean of the linear predictor, $\bar{\eta}$, in the derivation sample. In a new target population with covariate means $\bar{x}_{new}$ (potentially different from the derivation means $\bar{x}$ used for centering), the mean linear predictor over the target distribution is given by $\sum_{j}\beta_j(\bar{x}_{j,new}-\bar{x}_j)$, which is generally non-zero. The calibration-in-the-large error is therefore a linear function of the covariate shift $\Delta\mu=\bar{x}_{new}-\bar{x}$ and the coefficient vector $\beta$, a relationship made transparent by the centered parameterisation.
+
+### Re-calibration via Intercept Updating — Linear Regression {#sec-recalibration-linear}
+
+sss
+
+### Re-calibration via Intercept Updating — Logistic Regression {#sec-recalibration-logistic}
+
+sss
+
+### Extensions to Other GLMs/GAMS and Survival Models {#sec-recalibration-other}
+
+ssss
+
+### Estimating Non-linear Term Means from Histograms {#sec-recalibration-hist}
+
+ssss
+
+## Simulation Study {#sec-simulation}
+
+ssss
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# This will set the working directory to the root directory of the project.
+# Need this since:
+# All the paths in the config.yml file assumes that the working directory is in the root of the project
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+### Study 1: Histogram-Based Estimation of Non-linear Term Means {#sec-simulation-hist}
+
+ssss
+
+#### Design
+
+ssss
+
+#### Results
+
+ssss
+
+### Study 2: Comparison of Re-calibration Methods {#sec-simulation-compare}
+
+ssss
+
+#### Design
+
+ssss
+
+#### Results
+
+ssss
+
+## Case Studies {#sec-case}
+
+ssss
+
+### Overview
+
+ssss
+
+### Case Study 1: Linear Regression — Predicting Systolic Blood Pressure
+
+ssss
+
+### Case Study 2: Logistic Regression — 30-Day Hospital Readmission
+
+ssss
+
+### Case Study 3: Cox Proportional-Hazards Model — All-Cause Mortality
+
+ssss
+
+## Discussion {#sec-discussion}
+
+ssss
+
+### Interpretability
+
+ssss
+
+### Implementation
+
+ssss
+
+### Re-calibration Without Individual Data
+
+ssss
+
+### Limitations
+
+ssss
+
+### Relationship to Existing Literature
+
+ssss
+
+### Practical Recommendations
+
+ssss
+
+## Conclusion {#sec-conclusion}
+
+ssss
+
+## Acknowledgements
+
+The authors thank {{< todo "acknowledgements" author="dm" >}}. No specific funding for the computational work presented here is acknowledged at this stage; funding details will be added. {{< todo "funding info" author="dm" >}}
+
+## Data Availability Statement
+
+ssss
+
+## Conflict of Interest
+
+The authors declare no conflict of interest.
+
+## References
+
+1.  [@nelder1972]
+
+2.  [@hastie2017]
+
+3.  [@harrell2015]
+
+4.  [@steyerberg2019]
+
+5.  [@vancalster2019]
+
+6.  [@vancalster2016]
+
+7.  [@calibrat2019]
+
+8.  [@Platt1999]
+
+9.  [@debray2015]
+
+10. [@rieke2020]
+
+11. [@Eisinger-Mathason2025]
+
+12. [@aiken1991multiple]
+
+13. [@therneau2000]
+
+14. [@tidyverse]
+
+15. [@vanbuuren2018]
+
+16. [@anderson1972]
+
+17. [@king2001logistic]
+
+18. [@Rose2008]
+
+```{r}
+
+```
