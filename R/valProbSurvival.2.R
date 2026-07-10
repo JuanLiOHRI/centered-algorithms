@@ -4,8 +4,6 @@ require(timeROC)
 require(rms) # `cph`, `survest`
 require(ggplot2)
 
-source("R/brier.R", echo = FALSE) 
-
 #' Modify `CalibrationCurves::valProbSurvival` to work with recalibrated cox model.
 #'
 #' @param pred.lp Vector of the predicted linear predictors
@@ -13,8 +11,6 @@ source("R/brier.R", echo = FALSE)
 #' @param pred.prob.brier  Vector of the predicted event probabilities estimeated at timeHorizon - 0.01 for brier score
 #' @param outcome.time Vector of the time variable
 #' @param outcome.event Vector of the event variable
-#' @param maxtime The maxtime in the development dataset: maxtime = max(as.numeric(fit$y)) = max(train$time)
-#'                Add this to the model output, so the original model can have 'x=FALSE, y=FALSE'
 #' @param print.plot Control if plot the calibration plot
 #' For other parameters, see `CalibrationCurves::valProbSurvival`
 #' @return     Calibration curve and performance metrics
@@ -25,7 +21,6 @@ valProbSurvival.2 <- function(
   pred.prob.brier,
   outcome.time,
   outcome.event,
-  maxtime,
   print.plot = TRUE,
   alpha = 0.05,
   timeHorizon = NULL,
@@ -110,22 +105,34 @@ valProbSurvival.2 <- function(
     dimnames = list(c("Harrell C", "Uno C"), c("Estimate", "2.5 %", "97.5 %"))
   )
   stats$Concordance <- res_C
+  res <- timeROC(
+    T = valdata$time,
+    delta = valdata$event,
+    marker = valdata$LP,
+    cause = 1,
+    weighting = "marginal",
+    times = c(timeHorizon, max(valdata$time) - 0.01), # max(as.numeric(fit$y)) - 0.01,
+    iid = TRUE
+  )
   UnoTDAUC <- with(
-    timeROC(
-      T = valdata$time,
-      delta = valdata$event,
-      marker = valdata$LP,
-      cause = 1,
-      weighting = "marginal",
-      times = maxtime - 0.01, # max(as.numeric(fit$y)) - 0.01,
-      iid = TRUE
-    ),
-    c(
-      `Uno AUC` = AUC[[2]],
-      `2.5 %` = AUC[[2]] -
-        qnorm(1 - alpha / 2) * inference$vect_sd_1[[2]],
-      `97. 5 %` = AUC[[2]] +
-        qnorm(1 - alpha / 2) * inference$vect_sd_1[[2]]
+    res,
+    matrix(
+      c(
+        c(
+          AUC[[1]],
+          AUC[[1]] - qnorm(1 - alpha / 2) * inference$vect_sd_1[[1]],
+          AUC[[1]] + qnorm(1 - alpha / 2) * inference$vect_sd_1[[1]]
+        ),
+        c(
+          AUC[[2]],
+          AUC[[2]] - qnorm(1 - alpha / 2) * inference$vect_sd_1[[2]],
+          AUC[[2]] + qnorm(1 - alpha / 2) * inference$vect_sd_1[[2]]
+        )
+      ),
+      nrow = 2,
+      ncol = 3,
+      byrow = T,
+      dimnames = list(names(res$AUC), c("Uno AUC", "2.5 %", "97. 5 %"))
     )
   )
   stats$TimeDependentAUC <- UnoTDAUC
@@ -189,15 +196,24 @@ valProbSurvival.2 <- function(
     `2.5 %` = gval$coef - qnorm(1 - alpha / 2) * sqrt(gval$var),
     `97.5 %` = gval$coef + qnorm(1 - alpha / 2) * sqrt(gval$var)
   )
-  # stats$Calibration$BrierScore <- Score(list(cox = fit), formula = adjFormula,
-  #       data = valdata, conf.int = TRUE, times = timeHorizon -
-  #           0.01, cens.model = "km", metrics = "brier", summary = "ipa")$Brier$score
-  stats$Calibration$BrierScore <- brier.cox(
-    pred.prob.brier,
-    outcome.time,
-    outcome.event,
-    times = timeHorizon - 0.01
-  )
+  # stats$Calibration$BrierScore <- Score(
+  #   list(cox = fit), 
+  #   formula = adjFormula,
+  #   data = valdata, 
+  #   conf.int = TRUE, 
+  #   times = timeHorizon - 0.01, 
+  #   cens.model = "km", 
+  #   metrics = "brier", 
+  #   summary = "ipa")$Brier$score
+  stats$Calibration$BrierScore <- Score(
+    list(cox = pred.prob.brier), 
+    formula = Hist(time, event) ~ 1,
+    data = valdata, 
+    conf.int = TRUE, 
+    times = timeHorizon - 0.01, 
+    cens.model = "km", 
+    metrics = "brier", 
+    summary = "ipa")$Brier$score
 
   calCurves <- list(CoxCalibration = datCox, RCS = dat_cal)
   if (is.character(riskdist)) {

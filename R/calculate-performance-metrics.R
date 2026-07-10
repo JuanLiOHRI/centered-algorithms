@@ -87,7 +87,10 @@ compute_c_statistic_fg <- function(model, data, time_to_event = "time_to_event",
   )
   c_stat <- as.numeric(conc$concordance)
   c_se   <- as.numeric(sqrt(conc$var))
-  list(c_stat = c_stat, c_lo = c_stat - 1.96 * c_se, c_hi = c_stat + 1.96 * c_se)
+  cstat <- c(c_stat, c_stat - 1.96 * c_se, c_stat + 1.96 * c_se)
+  names(cstat)<- c("Estimate", "2.5 %", "97.5 %")
+  return(cstat)
+  #list(c_stat = c_stat, c_lo = c_stat - 1.96 * c_se, c_hi = c_stat + 1.96 * c_se)
 }
 
 #' Ratio of predicted risks at 95th vs 5th percentile.
@@ -128,7 +131,8 @@ compute_obs_cif_fg <- function(data, horizon, time_to_event = "time_to_event", e
 #' @param horizon   prediction horizon in years (unused, kept for API compatibility).
 #' @param model_for_slope the primary coxph model, used to extract the LP.
 #' @return list(slope)
-compute_calibration_fg <- function(pred_risk, data, horizon, model_for_slope = NULL, time_to_event = "time_to_event", event_type = "event_type") {
+compute_calibration_fg <- function(pred_risk, data, horizon, model_for_slope = NULL, 
+  time_to_event = "time_to_event", event_type = "event_type") {
   # Some modification by JL
   names(data)[which(names(data) == time_to_event)] <- "time_to_event"
   names(data)[which(names(data) == event_type)] <- "event_type"
@@ -187,9 +191,11 @@ calibration_plot_annotation <- function(bv) {
 #' @param data data frame with time_to_event and event_type columns.
 #' @param horizon prediction horizon in years.
 #' @return list(brier, brier_scaled)
-compute_brier_fg <- function(pred_risk, data, horizon, time_to_event = "time_to_event") {
+compute_brier_fg <- function(pred_risk, data, horizon,
+  time_to_event = "time_to_event", event_type = "event_type") {
   # Some modification by JL
   names(data)[which(names(data) == time_to_event)] <- "time_to_event"
+  names(data)[which(names(data) == event_type)] <- "event_type"
 
   followup <- pmin(data$time_to_event, horizon)
   # Observed status at horizon: 1 if dementia before horizon, 0 otherwise

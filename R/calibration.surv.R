@@ -169,7 +169,6 @@ calibration.surv.core <- function(
   )
 
   # outcome
-  maxtime <- centerList$maxtime
   formula <- centerList$fit.c$formula
   outcome <- as.character(formula)[2] # # parse the formula
   outcome_vec <- str_split_1(outcome, "[[:punct:]]+") %>% str_trim()
@@ -185,7 +184,6 @@ calibration.surv.core <- function(
       pred.prob.brier,
       outcome.time,
       outcome.event,
-      maxtime,
       print.plot = print.plot,
       timeHorizon = timeHorizon,
       ...
@@ -203,7 +201,6 @@ calibration.surv.core <- function(
       outcome.fgstart,
       outcome.fgstop,
       outcome.fgstatus,
-      maxtime,
       print.plot = print.plot,
       timeHorizon = timeHorizon,
       ...

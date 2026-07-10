@@ -4,18 +4,14 @@ require(timeROC)
 require(rms) # `cph`, `survest`
 require(ggplot2)
 
-source("R/brier.R", echo = FALSE) 
-
-#' Modify `valProbSurvival.2` to work with (recalibrated) fine-gray model.
+#' Modify `valProbSurvival.2` to work with fine-gray model, using `survival::finegray` + `survival::coxph`.
 #'
-#' @param pred.lp Vector of the predicted linear predictors
-#' @param pred.prob  Vector of the predicted event probabilities
-#' @param pred.prob.brier  Vector of the predicted event probabilities estimeated at timeHorizon - 0.01 for brier score
-#' @param fg_time The time vector for `survival::finegray`
-#' @param fg_event The event vector for `survival::finegray`: 
-#'                 0 = censor, 1 = pcm (event of interest), 2 = death (competing risk)
-#' @param maxtime The maxtime in the development dataset: maxtime = max(as.numeric(fit$y)) = max(train$time)
-#'                Add this to the model output, so the original model can have 'x=FALSE, y=FALSE'
+#' @param pred.lp Vector of the predicted linear predictors in the original data
+#' @param pred.prob  Vector of the predicted event probabilities  in the original data
+#' @param pred.prob.brier  Vector of the predicted event probabilities  in the original data,
+#'                         estimeated at timeHorizon - 0.01 for brier score
+#' @param outcome.time Vector of the time variable
+#' @param outcome.event Vector of the event variable
 #' @param print.plot Control if plot the calibration plot
 #' For other parameters, see `CalibrationCurves::valProbSurvival`
 #' @return     Calibration curve and performance metrics
@@ -24,10 +20,8 @@ valProbSurvival.fg <- function(
   pred.lp,
   pred.prob,
   pred.prob.brier,
-  outcome.fgstart,
-  outcome.fgstop,
-  outcome.fgstatus,
-  maxtime,
+  outcome.time,
+  outcome.event,
   print.plot = TRUE,
   alpha = 0.05,
   timeHorizon = NULL,
@@ -70,65 +64,70 @@ valProbSurvival.fg <- function(
   }
   # JL: using specific prediciton and outcome variables instead of the whole test set
   valdata <- data.frame(
-    fgstart = outcome.fgstart,
-    fgstop = outcome.fgstop,
-    fgstatus = outcome.fgstatus,
-    LP = predict(fit.o.c, newdata = test_fg, type = "lp"),
-    pred = pred.prob
+    time = outcome.time,
+    event = outcome.event,
+    LP = pred.lp,
+    pred = pred.prob,
+    pred.brier = pred.prob.brier
   )
-  names(valdata) <- c("fgstart", "fgstop", "fgstatus", "LP", "pred")
-  # if (!inherits(fit, "coxph"))
-  #     stop("Only model fits of class coxph are allowed")
+  # make sure the variables names are correct
+  names(valdata) <- c("time", "event", "LP", "pred", "pred.brier")
+  # Create the Fine-Gray weighted dataset
+  valdata_fg <- finegray(Surv(time, event) ~ ., data = valdata)
   plotCal <- match.arg(plotCal)
   CL.cox <- match.arg(CL.cox)
   CL.rcs <- match.arg(CL.rcs)
   stats <- list()
-  #valdata$LP = predict(fit, newdata = valdata, type = "lp")
-  argzConc <- alist(data = valdata, reverse = TRUE)
+  # Using `valdata_fg` with fgwt for concordance
+  argzConc <- alist(data = valdata_fg, reverse = TRUE, weights = fgwt)
   argzConc$obj <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ LP") #argzConc$obj = update(fit$formula, "~ - . + LP")
   HarrellC <- do.call("concordance", argzConc)
-  # UnoC doesn't work here: ! n/G2 timewt option not supported for (time1, time2) data
-  # argzConc$timewt <- "n/G2"
-  # UnoC <- do.call("concordance", argzConc)
+  # JL: UnoC doesn't work here, "! n/G2 timewt option not supported for (time1, time2) data"
   res_C <- matrix(
-    with(HarrellC, {
-      c(
-        concordance,
-        concordance - qnorm(1 - alpha / 2) * sqrt(var),
-        concordance + qnorm(1 - alpha / 2) * sqrt(var)
-      )
-    }),
+    c(
+      with(HarrellC, {
+        c(
+          concordance,
+          concordance - qnorm(1 - alpha / 2) * sqrt(var),
+          concordance + qnorm(1 - alpha / 2) * sqrt(var)
+        )
+      })
+    ),
     nrow = 1,
     ncol = 3,
     byrow = T,
     dimnames = list(c("Harrell C"), c("Estimate", "2.5 %", "97.5 %"))
   )
   stats$Concordance <- res_C
-  # 2026-06-30
+  # JL: `timeROC` could work in the competing risks setting, using `valdata`
+  res <- timeROC(
+    T = valdata$time,
+    delta = valdata$event,
+    marker = valdata$LP,
+    cause = 1,
+    weighting = "aalen",
+    times = c(timeHorizon, max(valdata$time) - 0.01) #,  max(as.numeric(fit$y)) - 0.01,
+    #iid = TRUE # ! Error : Weighting must be marginal for computing the iid representation
+    # But iid = TRUE is required for computation of all inference procedures (Confidence intervals or test for comparing AUCs)
+  )
   UnoTDAUC <- with(
-    timeROC(
-      T = valdata$time,
-      delta = valdata$event,
-      marker = valdata$LP,
-      cause = 1,
-      weighting = "marginal",
-      times = maxtime - 0.01, # max(as.numeric(fit$y)) - 0.01,
-      iid = TRUE
-    ),
-    c(
-      `Uno AUC` = AUC[[2]],
-      `2.5 %` = AUC[[2]] -
-        qnorm(1 - alpha / 2) * inference$vect_sd_1[[2]],
-      `97. 5 %` = AUC[[2]] +
-        qnorm(1 - alpha / 2) * inference$vect_sd_1[[2]]
+    res,
+    matrix(
+      c(AUC_1, AUC_2),
+      nrow = 2,
+      ncol = 2,
+      byrow = T,
+      dimnames = list(
+        c("Uno AUC, event of interest", "Uno AUC, competing event"),
+        names(res$AUC_1)
+      )
     )
   )
   stats$TimeDependentAUC <- UnoTDAUC
-  adjFormula <- as.formula("Surv(time, event) ~ 1") # adjFormula <- update(fit$formula, ~ -. + 1)
-  obj <- summary(survfit(adjFormula, data = valdata), times = timeHorizon)
+  adjFormula <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ 1") # adjFormula <- update(fit$formula, ~ -. + 1)
+  obj <- summary(survfit(adjFormula, data = valdata_fg), times = timeHorizon)
   obs_t <- 1 - obj$surv
-  # valdata$pred <- predictRisk(fit, newdata = valdata, times = timeHorizon)
-  exp_t <- mean(valdata$pred)
+  exp_t <- mean(valdata_fg$pred)
   OE_t <- obs_t / exp_t
   OE_summary <- c(
     OE = OE_t,
@@ -148,28 +147,33 @@ valProbSurvival.fg <- function(
         ) *
           sqrt(1 / obj$n.event)
       ),
-      Obs = obs_t, # JL OvsP
+    Obs = obs_t, # JL OvsP
     Pavg = exp_t # JL OvsP
   )
   stats$Calibration$InTheLarge <- OE_summary
-  calFormula <- as.formula("Surv(time, event) ~ LP") # calFormula <- update(fit$formula, ~ -. + LP)
-  calCox <- cph(calFormula, x = TRUE, y = TRUE, surv = TRUE, data = valdata)
+  calFormula <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ LP") # calFormula <- update(fit$formula, ~ -. + LP)
+  calCox <- cph(calFormula, x = TRUE, y = TRUE, surv = TRUE, data = valdata_fg)
   # Claude: Use paste0() instead of substitute() to avoid scoping issues with nk parameter
-  calRCSFormula <- as.formula(paste0("Surv(time, event) ~ rcs(LP, ", nk, ")"))
-  vcal <- cph(calRCSFormula, x = TRUE, y = TRUE, surv = TRUE, data = valdata)
+  calRCSFormula <- as.formula(paste0(
+    "Surv(fgstart, fgstop, fgstatus) ~ rcs(LP, ",
+    nk,
+    ")"
+  ))
+  vcal <- cph(calRCSFormula, x = TRUE, y = TRUE, surv = TRUE, data = valdata_fg)
   datCox <- cbind.data.frame(
-    obs = 1 - survest(calCox, times = timeHorizon, newdata = valdata)$surv,
-    lower = 1 - survest(calCox, times = timeHorizon, newdata = valdata)$upper,
+    obs = 1 - survest(calCox, times = timeHorizon, newdata = valdata_fg)$surv,
+    lower = 1 -
+      survest(calCox, times = timeHorizon, newdata = valdata_fg)$upper,
     upper = 1 -
-      survest(calCox, times = timeHorizon, newdata = valdata)$lower,
-    pred = valdata$pred
+      survest(calCox, times = timeHorizon, newdata = valdata_fg)$lower,
+    pred = valdata_fg$pred
   )
   datCox <- datCox[order(datCox$pred), ]
   dat_cal <- cbind.data.frame(
-    obs = 1 - survest(vcal, times = timeHorizon, newdata = valdata)$surv,
-    lower = 1 - survest(vcal, times = timeHorizon, newdata = valdata)$upper,
-    upper = 1 - survest(vcal, times = timeHorizon, newdata = valdata)$lower,
-    pred = valdata$pred
+    obs = 1 - survest(vcal, times = timeHorizon, newdata = valdata_fg)$surv,
+    lower = 1 - survest(vcal, times = timeHorizon, newdata = valdata_fg)$upper,
+    upper = 1 - survest(vcal, times = timeHorizon, newdata = valdata_fg)$lower,
+    pred = valdata_fg$pred
   )
   dat_cal <- dat_cal[order(dat_cal$pred), ]
   absdiff_cph <- abs(dat_cal$pred - dat_cal$obs)
@@ -178,21 +182,30 @@ valProbSurvival.fg <- function(
     setNames(quantile(absdiff_cph, c(0.5, 0.9)), c("E50", "E90")),
     Emax = max(absdiff_cph)
   )
-  gval <- coxph(calFormula, data = valdata)
+  gval <- coxph(calFormula, data = valdata_fg)
   stats$Calibration$Slope <- c(
     `calibration slope` = unname(gval$coef),
     `2.5 %` = gval$coef - qnorm(1 - alpha / 2) * sqrt(gval$var),
     `97.5 %` = gval$coef + qnorm(1 - alpha / 2) * sqrt(gval$var)
   )
-  # stats$Calibration$BrierScore <- Score(list(cox = fit), formula = adjFormula,
-  #       data = valdata, conf.int = TRUE, times = timeHorizon -
-  #           0.01, cens.model = "km", metrics = "brier", summary = "ipa")$Brier$score
-  stats$Calibration$BrierScore <- brier.cox(
-    pred.prob.brier,
-    outcome.time,
-    outcome.event,
-    times = timeHorizon - 0.01
-  )
+  # stats$Calibration$BrierScore <- Score(
+  #   list(cox = fit), 
+  #   formula = adjFormula,
+  #   data = valdata, 
+  #   conf.int = TRUE, 
+  #   times = timeHorizon - 0.01, 
+  #   cens.model = "km", 
+  #   metrics = "brier", 
+  #   summary = "ipa")$Brier$score
+  stats$Calibration$BrierScore <- Score(
+    list("FineGray_Cox" = pred.prob.brier), 
+    formula = Hist(time, event) ~ 1,
+    data = valdata, 
+    conf.int = TRUE, 
+    times = timeHorizon - 0.01, 
+    cause = "1",
+    metrics = "brier", 
+    summary = "ipa")$Brier$score
 
   calCurves <- list(CoxCalibration = datCox, RCS = dat_cal)
   if (is.character(riskdist)) {

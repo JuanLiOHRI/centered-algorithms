@@ -145,39 +145,10 @@ Compare the outputs of `CalibrationCurves::valProbSurvival` and `valProbSurvival
 
 ```{r}
 source("R/calibration.surv.R", echo = FALSE) # Modified function for cox models
-```
 
-## Brier
-
-```{r}
 timeHorizon <- 3
 timeHorizon_brier <- timeHorizon - 0.01 # as implemented within `CalibrationCurves::valProbSurvival`
-
-# ------ `riskRegression::Score` in `CalibrationCurves::valProbSurvival` ------ 
-res.1 <- valProbSurvival(fit.o.c, target, timeHorizon = timeHorizon, plotCal = "ggplot", nk = 5)
-res.1$stats$Calibration$BrierScore
-
-# ------ `survival::brier` ------ 
-brier_results <- brier(fit = fit.o.c, times = timeHorizon_brier, newdata = target)
-# Back-calculate the null model's Brier score from the full model output
-null_brier <- brier_results$brier / (1 - brier_results$rsquared)
-# Combine into a clean comparison table
-data.frame(
-  model      = c("Null model", "cox"),
-  times      = rep(brier_results$times,2),
-  IPA        = c(0, brier_results$rsquared),
-  Brier      = c(null_brier, brier_results$brier)  
-)
-
-# ------ `brier.cox` ------ 
-pred.prob <- center_predict(centerList, newdata = target, type = "probability", 
-                            times = timeHorizon_brier)
-outcome.time <- target$ryear
-outcome.event <- target$rfs
-brier.cox(pred.prob, outcome.time, outcome.event, times = timeHorizon_brier)
 ```
-
-## Other metrics
 
 ```{r}
 # `CalibrationCurves::valProbSurvival`
@@ -213,8 +184,6 @@ fit.o.c.2 <- coxph(Surv(ryear, rfs) ~ csize + cnode + grade3 + csize * rcs(pgr2,
   model = FALSE, x = FALSE, y = FALSE,
   # also center on dummy variables
   nocenter = NULL) 
-# IMPORTANT: maxtime in the `original` dataset
-maxtime <- max(original$ryear, na.rm = T)
 
 # get the prediction and outcomes in `target`
 pred.lp <- predict(fit.o.c.2, newdata = target, type = "lp")
@@ -230,7 +199,6 @@ res.3 <- valProbSurvival.2(
     pred.prob.brier,
     outcome.time,
     outcome.event,
-    maxtime,
     # IMPORTANT, make sure this `timeHorizon` matches the one used in `pred.prob` and `pred.prob.brier`
     timeHorizon = timeHorizon, 
     plotCal = "ggplot", 

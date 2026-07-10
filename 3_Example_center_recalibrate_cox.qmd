@@ -457,7 +457,6 @@ pred.prob <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
 pred.prob.brier <- 1 - t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
 outcome.time <- target$ryear
 outcome.event <- target$rfs
-maxtime <- centerList$maxtime
 
 res.1 <- valProbSurvival.2(
   pred.lp,
@@ -465,7 +464,6 @@ res.1 <- valProbSurvival.2(
   pred.prob.brier,
   outcome.time,
   outcome.event,
-  maxtime,
   timeHorizon = timeHorizon,
   plotCal = "ggplot",
   nk = 5
@@ -511,7 +509,6 @@ pred.prob <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
 pred.prob.brier <- 1 - t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
 outcome.time <- target$ryear
 outcome.event <- target$rfs
-maxtime <- centerList$maxtime
 
 res.4 <- valProbSurvival.2(
   pred.lp,
@@ -519,7 +516,6 @@ res.4 <- valProbSurvival.2(
   pred.prob.brier,
   outcome.time,
   outcome.event,
-  maxtime,
   timeHorizon = timeHorizon,
   plotCal = "ggplot",
   nk = 5

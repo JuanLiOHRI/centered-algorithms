@@ -28,7 +28,6 @@ source("R/center_prepare.R", echo = FALSE)
 #' * `interaction_list`: List of interaction terms.
 #' * `vec_mean`: Vector of mean values of each term.
 #' * `outcome_mean`: Mean value of the outcome in `data` (scalar for linear and logistic regression, vector for cox and fine-gray).
-#' * `maxtime`: Maximum time for survival models
 #' @export
 center_fit <- function(fit, data, times = NULL, data_fg = NULL) {
   # extract the formula
@@ -77,7 +76,6 @@ center_fit <- function(fit, data, times = NULL, data_fg = NULL) {
 
   # ------- outcome mean -------
   outcome_mean <- NULL
-  maxtime <- NULL
   if (surv) {
     formula_surv <- as.formula(paste0(outcome, " ~ 1"))
     # NOTE: for fine-gray, this is a Kaplan-Meier (KM) estimator on the prepared `data_fg`
@@ -88,14 +86,6 @@ center_fit <- function(fit, data, times = NULL, data_fg = NULL) {
     pred.prob <- 1 - t(summary(surv_fit, times = times)$surv)
     colnames(pred.prob) <- times
     outcome_mean <- pred.prob
-    # maxtime
-    if (length(outcome_vec) == 2) {
-      # cox: time, tatus
-      maxtime <- max(data_processed[, outcome_vec[1]], na.rm = T)
-    } else {
-      # fine-gray: fgstart, fgstop, fgstatus
-      maxtime <- max(data_processed[, outcome_vec[2]], na.rm = T)
-    }
   } else {
     outcome_mean <- mean(data[, outcome], na.rm = T)
   }
@@ -112,7 +102,6 @@ center_fit <- function(fit, data, times = NULL, data_fg = NULL) {
     predictors_poly = res_prepared$predictors_poly,
     interaction_list = res_prepared$interaction_list,
     vec_mean = res_prepared$vec_mean,
-    outcome_mean = outcome_mean,
-    maxtime = maxtime
+    outcome_mean = outcome_mean
   ))
 }
