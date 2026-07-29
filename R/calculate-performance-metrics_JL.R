@@ -246,9 +246,11 @@ compute_brier_fg <- function(pred_risk, data, horizon,
 #' @param n_knots   number of RCS knots for the flexible model (default 4).
 #' @param n_grid    number of grid points for the curve (default 200).
 #' @return numeric scalar: the ICI value.
-compute_ici_fg <- function(pred_risk, data, horizon, n_knots = 4, n_grid = 200, time_to_event = "time_to_event") {
+compute_ici_fg <- function(pred_risk, data, horizon, n_knots = 4, n_grid = 200, 
+  time_to_event = "time_to_event", event_type = "event_type") {
   # Some modification by JL
   names(data)[which(names(data) == time_to_event)] <- "time_to_event"
+  names(data)[which(names(data) == event_type)] <- "event_type"
 
   keep      <- !is.na(pred_risk)
   pred_risk <- pred_risk[keep]
@@ -497,9 +499,10 @@ bootstrap_fg_validation <- function(model, data, n_boot = 200, horizon = 5,
 #' @export
 compute_fg_calibration_curve <- function(model, data, horizon = 5,
                                          n_knots = 4, n_grid = 200,
-                                        time_to_event = "time_to_event") {
+                                        time_to_event = "time_to_event", event_type = "event_type") {
   # Some modification by JL
   names(data)[which(names(data) == time_to_event)] <- "time_to_event"
+  names(data)[which(names(data) == event_type)] <- "event_type"
 
   # Step 1: predicted CIF from the primary model
   p_hat    <- compute_fg_pred_risk(model, data, horizon)

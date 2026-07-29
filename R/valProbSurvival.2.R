@@ -3,6 +3,7 @@ require(survival)
 require(timeROC)
 require(rms) # `cph`, `survest`
 require(ggplot2)
+require(riskRegression)
 
 #' Modify `CalibrationCurves::valProbSurvival` to work with recalibrated cox model.
 #'

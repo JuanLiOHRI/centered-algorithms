@@ -125,7 +125,7 @@ valProbSurvival.fg <- function(
   )
   stats$TimeDependentAUC <- UnoTDAUC
   adjFormula <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ 1") # adjFormula <- update(fit$formula, ~ -. + 1)
-  obj <- summary(survfit(adjFormula, data = valdata_fg), times = timeHorizon)
+  obj <- summary(survfit(adjFormula, data = valdata_fg, weights = fgwt), times = timeHorizon)
   obs_t <- 1 - obj$surv
   exp_t <- mean(valdata_fg$pred)
   OE_t <- obs_t / exp_t
@@ -152,14 +152,30 @@ valProbSurvival.fg <- function(
   )
   stats$Calibration$InTheLarge <- OE_summary
   calFormula <- as.formula("Surv(fgstart, fgstop, fgstatus) ~ LP") # calFormula <- update(fit$formula, ~ -. + LP)
-  calCox <- cph(calFormula, x = TRUE, y = TRUE, surv = TRUE, data = valdata_fg)
+  calCox <- cph(
+    calFormula,
+    x = TRUE,
+    y = TRUE,
+    surv = TRUE,
+    data = valdata_fg,
+    # IMPORTANT to use the weight
+    weights = fgwt
+  )
   # Claude: Use paste0() instead of substitute() to avoid scoping issues with nk parameter
   calRCSFormula <- as.formula(paste0(
     "Surv(fgstart, fgstop, fgstatus) ~ rcs(LP, ",
     nk,
     ")"
   ))
-  vcal <- cph(calRCSFormula, x = TRUE, y = TRUE, surv = TRUE, data = valdata_fg)
+  vcal <- cph(
+    calRCSFormula,
+    x = TRUE,
+    y = TRUE,
+    surv = TRUE,
+    data = valdata_fg,
+    # IMPORTANT to use the weight
+    weights = fgwt
+  )
   datCox <- cbind.data.frame(
     obs = 1 - survest(calCox, times = timeHorizon, newdata = valdata_fg)$surv,
     lower = 1 -
@@ -182,7 +198,12 @@ valProbSurvival.fg <- function(
     setNames(quantile(absdiff_cph, c(0.5, 0.9)), c("E50", "E90")),
     Emax = max(absdiff_cph)
   )
-  gval <- coxph(calFormula, data = valdata_fg)
+  gval <- coxph(
+    calFormula,
+    data = valdata_fg,
+    # IMPORTANT to use the weight
+    weights = fgwt
+  )
   stats$Calibration$Slope <- c(
     `calibration slope` = unname(gval$coef),
     `2.5 %` = gval$coef - qnorm(1 - alpha / 2) * sqrt(gval$var),

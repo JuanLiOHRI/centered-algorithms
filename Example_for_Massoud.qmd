@@ -1,0 +1,295 @@
+---
+title: "Examples of the proper center and recalibrate pipeline: coxph"
+author: "Juan Li"
+date: 2026-06-16
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+
+library(CalibrationCurves)
+library(survival)
+library(ggsurvfit)
+library(gtsummary)
+
+# Proper centering of the original model, with sufficient but light-weighted model outputs
+source("R/center_fit.R", echo = FALSE) 
+# Predicting on the centered model
+source("R/center_predict.R", echo = FALSE) 
+# Recalibrating the centered model using summary stats in a `newdata`
+source("R/center_recalibrate.R", echo = FALSE) 
+```
+
+# Breast Cancer Survival Data from Rotterdam and Germany
+
+See `?CalibrationCurves::trainDataSurvival`.
+
+```{r}
+# variables for `time` and `status` are `ryear` and `rfs`, respectively
+data(trainDataSurvival) # Rotterdam
+data(testDataSurvival) # German Breast Cancer Study Group
+```
+
+Kaplan-Meier plots: https://www.emilyzabor.com/survival-analysis-in-r.html
+
+```{r}
+data <- bind_rows(
+  trainDataSurvival %>% select(ryear, rfs) %>% mutate(type = "train"),
+  testDataSurvival %>% select(ryear, rfs) %>% mutate(type = "test")
+)
+data$type <- factor(data$type, levels = c("train", "test"))
+
+survfit2(Surv(ryear, rfs) ~ type, data = data) %>% 
+  ggsurvfit() +
+  add_confidence_interval() +
+  add_risktable()
+```
+
+## Variables
+
+### in both datasets
+
+`pid`: patient identifier
+
+`age`: age at surgery
+
+`meno`: menopausal status (0 = premenopausal, 1 = postmenopausal)
+
+`size`: tumor size, a factor with levels \<= 20, 20-50, \>50
+
+- `csize`: Categorized tumor size, copied from size (factor)
+
+`grade`: differentiation grade
+
+- `grade3`: Recoded grade factor (levels: "1-2", "3")
+
+`nodes`: number of positive lymph nodes
+
+- `nodes2`: Winsorized node count (numeric)
+
+- `nodes3`: Restricted cubic spline basis for nodes2 (numeric)
+
+- `cnode`: Categorized node involvement (factor: "0", "1-3", "\>3")
+
+`pgr`: progesterone receptors (fmol/l)
+
+- `pgr2`: Winsorized progesterone receptor level (numeric)
+
+- `pgr3`: Restricted cubic spline basis for original pgr (numeric)
+
+`er`: estrogen receptors (fmol/l)
+
+`hormon`: hormonal treatment (0 = no, 1 = yes)
+
+`ryear`: Follow-up time for RFS, in years (numeric)
+
+`rfs`: Recurrence-free survival status (0 = no event, 1 = event) (numeric)
+
+`epoch`: Follow-up epoch indicator after splitting at 5 years (numeric)
+
+### only in `trainDataSurvival`
+
+`year`: year of surgery
+
+`chemo`: chemotherapy
+
+`rtime`: days to relapse or last follow-up
+
+`recur`: 0 = no relapse, 1 = relapse
+
+`dtime`: days to death or last follow-up
+
+`death`: 0 = alive, 1 = dead
+
+`tstart`
+
+### only in `testDataSurvival`
+
+`rfstime`, `status`
+
+```{r}
+original <- trainDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2)
+target <- testDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2)
+summary(original)
+summary(target)
+```
+
+# Centering
+
+## Fitting the centered model using `survival::coxph()`, with `nocenter = NULL`
+
+This way, `survival::coxph()` does its internal centering, including the dummy variables.
+
+```{r}
+# The original model without centering
+options(scipen = 999)
+
+fit.o.c <- coxph(Surv(ryear, rfs) ~ csize + cnode + grade3 + csize * rcs(pgr2,3), data = original,
+  # make the model most light-weighted and meet requirements of the secured environment
+  model = FALSE, x = FALSE, y = FALSE,
+  # also center on dummy variables
+  nocenter = NULL) 
+```
+
+## Transport the centered model to a new dataset
+
+**Note:** Here, `center_predict` is a wrapper function of the corresponding code in Method 1, the main reason to have `center_predict` is to automatically incorporate `delta_recal`.
+
+```{r}
+pred.m1.lp <- predict(fit.o.c, newdata = target, type = "lp")
+pred.m1.risk <- predict(fit.o.c, newdata = target, type = "risk") # exp(lp)
+surv.fit <- survfit(fit.o.c, newdata = target)
+pred.m1.survival <- t(summary(surv.fit, times = 3)$surv) # probability of survival at a specific time
+pred.m1.prob <- 1 - pred.m1.survival # probability of event at a specific time
+head(cbind(pred.m1.lp, pred.m1.risk, pred.m1.survival, pred.m1.prob))
+```
+
+## Recalibrate
+
+**Note:**
+
+1.  The `coxph` object cannot be directly updated to reflect the recalibration changes. The current work-around is to do it manually in `predict_centre`.
+
+2.  Therefore, here `center_recalibrate` is mainly used to calculate the model shift, *i.e.* `delta_recal`.
+
+3.  For re-calibration, we can only work with one single `timeHorizon` at a time.
+
+4.  The specific `timeHorizon` should be within the pre-specify `times` when running `center_fit`.
+
+5.  The method in doi:10.1016/j.jclinepi.2025.111895 is as following:
+
+- suppose the risk/probability of event at a specific time is $\theta = 1 - S_{KM}(t)$, the rescaling factor they proposed was $\Delta_{rescaling} = ln[-ln(1-\theta_{derived})] - ln[-ln(1-\theta_{target})]$.
+
+- Then, the recalibrated risk is $\theta_{recal} = 1 - exp(-exp(ln[-ln(1-\theta_{ori})]-\Delta_{rescaling}))$.
+
+- Let's substitute $S_{recal} = 1 - \theta_{recal}$ and $S_{ori} = 1 - \theta_{ori}$ into the equation, then $1 - S_{recal} = 1 - exp(-exp(ln[-ln(S_{ori})]-\Delta_{rescaling}))$, *i.e.*, $S_{recal} = exp(-exp(ln[-ln(S_{ori})]-\Delta_{rescaling}))$
+
+$= e^{-e^{ln[-ln(S_{ori})]-\Delta_{rescaling}}}$
+
+$= e^{-e^{ln[-ln(S_{ori})]}e^{-\Delta_{rescaling}}}$
+
+$= [e^{-e^{ln[-ln(S_{ori})]}}]^{e^{-\Delta_{rescaling}}}$
+
+$= [e^{ln(S_{ori})}]^{e^{-\Delta_{rescaling}}}$
+
+$= [S_{ori}]^{e^{-\Delta_{rescaling}}}$
+
+- In the Cox model, the equation for hazard is $h(t|X_i) = h_0(t)exp(\beta^TX_i)$. And the survival function is $S(t|X_i) = [S_0(t)]^{exp(\beta^TX_i)}$. Therefore, the equation above can be written as $S_{recal} = [S_{ori}]^{e^{-\Delta_{rescaling}}}$
+
+$= ([S_{0,ori}(t)]^{e^{\beta^TX_i}})^{e^{-\Delta_{rescaling}}}$
+
+$= S_{0,ori}(t)^{e^{\beta^TX_i}e^{-\Delta_{rescaling}}}$
+
+$= S_{0,ori}(t)^{e^{(\beta^TX_i -\Delta_{rescaling})}}$
+
+- Note, in my implementation, I make `delta_recal` = $-\Delta_{rescaling} = ln[-ln(1-\theta_{target})] - ln[-ln(1-\theta_{derived})]$ (*i.e.* `outcome_mean_target_clog_log - outcome_mean_original_clog_log`).
+
+```{r}
+# Time point for calibration and recalibration
+timeHorizon <- 3
+
+# Probability of event at the specific `timeHorizon`
+# In original data
+surv_fit <- survfit(Surv(ryear, rfs) ~ 1, data = original)
+prob.original <- 1 - t(summary(surv_fit, times = timeHorizon)$surv)[1]
+# In target data
+surv_fit <- survfit(Surv(ryear, rfs) ~ 1, data = target)
+prob.target <- 1 - t(summary(surv_fit, times = timeHorizon)$surv)[1]
+
+# The rescaling factor
+prob.original.cloglog <- log(-log(1 - prob.original))
+prob.target.cloglog <- log(-log(1 - prob.target))
+delta_recal <- prob.target.cloglog - prob.original.cloglog
+```
+
+# Calibration plots
+
+```{r}
+source("R/valProbSurvival.2.R", echo = FALSE) # Modified function for cox models
+```
+
+```{r}
+# The original model
+pred.lp <- predict(fit.o.c, target, type = "lp")
+surv.fit <- survfit(fit.o.c, newdata = target)
+pred.surv <- t(summary(surv.fit, times = timeHorizon)$surv)
+pred.prob <- 1 - pred.surv
+pred.surv.brier <- t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
+pred.prob.brier <- 1 - pred.surv.brier
+outcome.time <- target$ryear
+outcome.event <- target$rfs
+
+res.1 <- valProbSurvival.2(
+  pred.lp,
+  pred.prob,
+  pred.prob.brier,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+```{r}
+# The recalibrated model
+pred.lp.recal <- pred.lp + delta_recal
+pred.prob.recal <- 1 - pred.surv ^ exp(delta_recal)
+pred.prob.brier.recal <- 1 - pred.surv.brier ^ exp(delta_recal)
+
+res.2 <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+**Note:** the `offset(lp)` method doesn't work for `coxph`.
+
+```{r}
+# update intercept using Platt's calibration, which requires linked individual-level newdata
+# Use `valProbSurvival.2` directly here
+
+target$LP <- pred.lp
+fit.platt <- coxph(Surv(ryear, rfs) ~ LP, data = target,
+model = FALSE, x = FALSE, y = FALSE)
+
+pred.lp.platt <- predict(fit.platt, target, type = "lp")
+surv.fit <- survfit(fit.platt, newdata = target)
+pred.prob.platt <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
+pred.prob.brier.platt <- 1 - t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
+
+res.3 <- valProbSurvival.2(
+  pred.lp.platt,
+  pred.prob.platt,
+  pred.prob.brier.platt,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+```{r}
+res.1$stats$Calibration$Statistics
+res.2$stats$Calibration$Statistics
+res.3$stats$Calibration$Statistics
+```
+
+```{r}
+
+```

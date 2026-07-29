@@ -80,7 +80,7 @@ fit <- coxph(
   id = id, robust = TRUE)
 ```
 
-__Note 1:__ The mean values in `fit` are of `data_fg` not `data`!!!
+**Note 1:** The mean values in `fit` are of `data_fg` not `data`!!!
 
 ```{r}
 print("Mean values in `fit`: ")
@@ -93,7 +93,7 @@ X <- data %>% select(hgb, creat, mspike, age)
 colMeans(X)
 ```
 
-__Note 2:__ Predicted linear predictors are identical using the below two methods
+**Note 2:** Predicted linear predictors are identical using the below two methods
 
 ```{r}
 # Method 1
@@ -132,8 +132,128 @@ res <- valProbSurvival.fg(
     # IMPORTANT, make sure this `timeHorizon` matches the one used in `pred.prob` and `pred.prob.brier`
     timeHorizon = timeHorizon, 
     plotCal = "ggplot", 
-    nk = 5
+    nk = 4
   )
+```
+
+# Compare with results using "calculate-performance-metrics.R"
+
+```{r}
+source("R/calculate-performance-metrics_JL.R", echo = FALSE)
+
+# ------------ Compare metrics ---------
+print("AUC: almost identical, slight difference in confidence intervals.")
+res$stats$Concordance
+# C-statistic (ours)
+compute_c_statistic_fg(fit, data, time_to_event = "time", event_type = "status")
+
+print("Brier: almost identical. Note `valProbSurvival.fg` uses `riskRegression::Score` for Brier.")
+res$stats$Calibration$BrierScore
+# Brier (ours)
+compute_brier_fg(pred.prob.brier, data, timeHorizon - 0.01, time_to_event = "time", event_type = "status")
+
+# Calibration curve
+res_cal <- compute_fg_calibration_curve(fit, data, horizon = timeHorizon, n_knots = 4,
+time_to_event = "time", event_type = "status")
+lim <- range(c(res_cal$curve$predicted, res_cal$curve$observed))
+ggplot(res_cal$curve, aes(x = predicted, y = observed)) +
+  geom_line(color = "darkred", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50") +
+  geom_rug(data = data.frame(p = res_cal$p_hat), aes(x = p, y = NULL),
+           sides = "b", alpha = 0.2) +
+  coord_cartesian(xlim = c(0,1), ylim = c(0,1)) +
+  theme_minimal()
+
+print("ICI: not identical")
+res$stats$Calibration$Statistics
+compute_ici_fg(pred.prob, data, horizon = timeHorizon, time_to_event = "time", event_type = "status")
+```
+
+```{r}
+# Define the time point for evaluation
+timeHorizon <- 300
+nk <- 4
+
+pred.lp <- predict(fit, newdata = data, type = "lp")
+surv.fit <- survfit(fit, data)
+pred.prob <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
+outcome.time <- data$time
+outcome.event <- data$status
+
+valdata <- data.frame(
+  time = outcome.time,
+  event = outcome.event,
+  LP = pred.lp,
+  pred = pred.prob
+)
+# make sure the variables names are correct
+names(valdata) <- c("time", "event", "LP", "pred")
+# Create the Fine-Gray weighted dataset
+valdata_fg <- finegray(Surv(time, event) ~ ., data = valdata)
+
+# ------- Compare `survival` and `rms` -------
+# Results are (almost) identical
+library(rms)
+fit.survival <- coxph(
+  Surv(fgstart, fgstop, fgstatus) ~ rcs(pred, nk),
+  data = valdata_fg,
+  weight = fgwt,
+  # also center on dummy variables
+  nocenter = NULL
+)
+pred.survival <- 1 -
+  t(
+    summary(
+      survfit(fit.survival, newdata = valdata_fg),
+      times = timeHorizon
+    )$surv
+  )
+
+calRCSFormula <- as.formula(paste0(
+  "Surv(fgstart, fgstop, fgstatus) ~ rcs(pred, ",
+  nk,
+  ")"
+))
+fit.rms <- cph(
+  Surv(fgstart, fgstop, fgstatus) ~ rcs(pred, nk),
+  x = TRUE,
+  y = TRUE,
+  surv = TRUE,
+  data = valdata_fg,
+  # IMPORTANT to use the weight
+  weights = fgwt
+)
+pred.rms <- 1 - survest(fit.rms, times = timeHorizon, newdata = valdata_fg)$surv
+cbind(fit.survival$coefficients, fit.rms$coefficients)
+summary(pred.survival - pred.rms)
+
+# ------------- ICI ---------
+res$stats$Calibration$Statistics
+
+dat_cal <- cbind.data.frame(
+  obs.survival = pred.survival,
+  obs = 1 - survest(fit.rms, times = timeHorizon, newdata = valdata_fg)$surv,
+  lower = 1 - survest(fit.rms, times = timeHorizon, newdata = valdata_fg)$upper,
+  upper = 1 - survest(fit.rms, times = timeHorizon, newdata = valdata_fg)$lower,
+  pred = valdata_fg$pred
+)
+absdiff_cph <- abs(dat_cal$pred - dat_cal$obs)
+(res_stats <- c(
+  ICI = mean(absdiff_cph),
+  setNames(quantile(absdiff_cph, c(0.5, 0.9)), c("E50", "E90")),
+  Emax = max(absdiff_cph)
+))
+
+absdiff_cph.2 <- abs(dat_cal$pred - dat_cal$obs.survival)
+(res_stats <- c(
+  ICI = mean(absdiff_cph.2),
+  setNames(quantile(absdiff_cph.2, c(0.5, 0.9)), c("E50", "E90")),
+  Emax = max(absdiff_cph.2)
+))
+
+
+# ---------- `compute_ici_fg ` -------------
+compute_ici_fg_2(valdata$pred, data, horizon = timeHorizon, n_knots = nk, time_to_event = "time", event_type = "status")
 ```
 
 # Compare with results using `riskRegression`
@@ -179,34 +299,17 @@ res$stats$Calibration$InTheLarge
 res$stats$Calibration$Statistics
 ```
 
-# Compare with results using "calculate-performance-metrics.R" 
-
-```{r}
-source("R/calculate-performance-metrics.R", echo = FALSE)
-
-# ------------ Compare metrics ---------
-print("AUC: almost identical, slight difference in confidence intervals.")
-res$stats$Concordance
-# C-statistic (ours)
-compute_c_statistic_fg(fit, data, time_to_event = "time", event_type = "status")
-
-print("Brier: almost identical.")
-res$stats$Calibration$BrierScore
-# Brier (ours)
-compute_brier_fg(pred.prob.brier, data, timeHorizon - 0.01, time_to_event = "time", event_type = "status")
-```
-
 # Trick in testing: loading defalut values of a function into the global environment
 
 ```{r}
-# # 1. Safely extract all arguments from the function
-# vars <- formals(valProbSurvival.fg)
+# 1. Safely extract all arguments from the function
+vars <- formals(valProbSurvival.fg)
 
-# # 2. Drop required arguments (like fit and valdata) that lack a default value
-# defaults_only <- vars[sapply(vars, function(x) !is.symbol(x) && x != "")]
+# 2. Drop required arguments (like fit and valdata) that lack a default value
+defaults_only <- vars[sapply(vars, function(x) !is.symbol(x) && x != "")]
 
-# # 3. Unpack the actual default values into your Global Environment
-# list2env(defaults_only, envir = .GlobalEnv)
+# 3. Unpack the actual default values into your Global Environment
+list2env(defaults_only, envir = .GlobalEnv)
 ```
 
 ```{r}
