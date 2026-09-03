@@ -1,9 +1,3 @@
-require(dplyr)
-require(stringr)
-require(survival)
-
-source("R/center_prepare.R", echo = FALSE) 
-
 #' The function recalibrates the centered model using `newdata`.
 #'
 #' @param centerList The returned list from `center_fit`

@@ -1,7 +1,3 @@
-require(stringr)
-require(dplyr)
-require(labelled)
-
 #' The function process the data for the centered model base on known `fit` object
 #' Normally used inside `center_fit()`
 #'
@@ -136,6 +132,9 @@ center_prepare_0 <- function(
   data_processed <- data.frame(temp = rep(1, nrow(data)))
   if (!is.null(terms)) {
     data_processed <- data[, terms]
+    if (is.null(names(data_processed))) {
+      names(data_processed) <- terms
+    }
   } else {
     for (var in predictors) {
       df_temp <- data %>% select(all_of(str_subset(names(data), fixed(var))))

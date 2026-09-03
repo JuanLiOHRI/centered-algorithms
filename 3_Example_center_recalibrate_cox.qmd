@@ -15,17 +15,34 @@ editor: visual
 #| message: false
 #| output: false
 
-library(CalibrationCurves)
+# ======== For unknown issue of connecting to R server in positron, load all packages and source code here =========
+library(rms)
+library(Hmisc)
+library(dplyr)
+library(stringr)
 library(survival)
+library(ggplot2)
+library(ggpubr) 
+library(CalibrationCurves)
+library(riskRegression)
 library(ggsurvfit)
 library(gtsummary)
+library(timeROC)
 
+# Prepare data for the centered algorithm
+source("R/center_prepare.R", echo = FALSE) 
 # Proper centering of the original model, with sufficient but light-weighted model outputs
 source("R/center_fit.R", echo = FALSE) 
 # Predicting on the centered model
-source("R/center_predict.R", echo = FALSE) 
+source("R/center_pred.R", echo = FALSE) 
 # Recalibrating the centered model using summary stats in a `newdata`
 source("R/center_recalibrate.R", echo = FALSE) 
+# Wrapper function for calibration curves and metrics
+# Including the following functions: `calibration`, `calibration.con`, `calibration.OvsP`
+source("R/calibration.R", echo = FALSE)
+# Modified function for cox models
+source("R/calibration.surv.R", echo = FALSE) 
+source("R/calibration_curve_cox.R", echo = FALSE) # valProbSurvival.2
 ```
 
 # Breast Cancer Survival Data from Rotterdam and Germany
@@ -36,21 +53,6 @@ See `?CalibrationCurves::trainDataSurvival`.
 # variables for `time` and `status` are `ryear` and `rfs`, respectively
 data(trainDataSurvival) # Rotterdam
 data(testDataSurvival) # German Breast Cancer Study Group
-```
-
-Kaplan-Meier plots: https://www.emilyzabor.com/survival-analysis-in-r.html
-
-```{r}
-data <- bind_rows(
-  trainDataSurvival %>% select(ryear, rfs) %>% mutate(type = "train"),
-  testDataSurvival %>% select(ryear, rfs) %>% mutate(type = "test")
-)
-data$type <- factor(data$type, levels = c("train", "test"))
-
-survfit2(Surv(ryear, rfs) ~ type, data = data) %>% 
-  ggsurvfit() +
-  add_confidence_interval() +
-  add_risktable()
 ```
 
 ## Variables
@@ -343,6 +345,21 @@ pred.m2.prob <- center_predict(centerList, newdata = target, type = "probability
 head(cbind(pred.m2.lp, pred.m2.risk, pred.m2.survival, pred.m2.prob))
 ```
 
+Kaplan-Meier plots: https://www.emilyzabor.com/survival-analysis-in-r.html, which shows that at time = 3, the original data has higher survival probability, thus lower event probability, than the target data.
+
+```{r}
+data <- bind_rows(
+  trainDataSurvival %>% select(ryear, rfs) %>% mutate(type = "original"),
+  testDataSurvival %>% select(ryear, rfs) %>% mutate(type = "target")
+)
+data$type <- factor(data$type, levels = c("original", "target"))
+
+survfit2(Surv(ryear, rfs) ~ type, data = data) %>% 
+  ggsurvfit() +
+  add_confidence_interval() +
+  add_risktable()
+```
+
 **Note:**
 
 1.  The `coxph` object cannot be directly updated to reflect the recalibration changes. The current work-around is to do it manually in `predict_centre`.
@@ -351,15 +368,23 @@ head(cbind(pred.m2.lp, pred.m2.risk, pred.m2.survival, pred.m2.prob))
 
 3.  For re-calibration, we can only work with one single `timeHorizon` at a time.
 
-4.  The specific `timeHorizon` should be within the pre-specify `times` when running `center_fit`.
+4.  The specific `timeHorizon` should be within the pre-specified `times` when running `center_fit`.
 
 5.  The method in doi:10.1016/j.jclinepi.2025.111895 is as following:
 
-- suppose the risk/probability of event at a specific time is $\theta = 1 - S_{KM}(t)$, the rescaling factor they proposed was $\Delta_{rescaling} = ln[-ln(1-\theta_{derived})] - ln[-ln(1-\theta_{target})]$.
+- suppose the risk/probability of event at a specific time, say, $t=10$, is $\theta = 1 - S_{KM}(10)$, then
 
-- Then, the recalibrated risk is $\theta_{recal} = 1 - exp(-exp(ln[-ln(1-\theta_{ori})]-\Delta_{rescaling}))$.
+  - Observed risk for derivation population is $\theta_{derived} = 1 - S^{derived}_{KM}(10)$
 
-- Let's substitute $S_{recal} = 1 - \theta_{recal}$ and $S_{ori} = 1 - \theta_{ori}$ into the equation, then $1 - S_{recal} = 1 - exp(-exp(ln[-ln(S_{ori})]-\Delta_{rescaling}))$, *i.e.*, $S_{recal} = exp(-exp(ln[-ln(S_{ori})]-\Delta_{rescaling}))$
+  - Observed risk for target population is $\theta_{target} = 1 - S^{target}_{KM}(10)$
+
+the rescaling factor they proposed was $\Delta_{rescaling} = ln[-ln(1-\theta_{derived})] - ln[-ln(1-\theta_{target})]$.
+
+- Then, the recalibrated risk is $risk_{recal} = 1 - exp(-exp(ln[-ln(1-risk_{ori})]-\Delta_{rescaling}))$.
+
+- Let's substitute $S_{recal} = 1 - risk_{recal}$ and $S_{ori} = 1 - risk_{ori}$ into the equation, then
+
+$S_{recal} = exp(-exp(ln[-ln(S_{ori})]-\Delta_{rescaling}))$
 
 $= e^{-e^{ln[-ln(S_{ori})]-\Delta_{rescaling}}}$
 
@@ -379,7 +404,7 @@ $= S_{0,ori}(t)^{e^{\beta^TX_i}e^{-\Delta_{rescaling}}}$
 
 $= S_{0,ori}(t)^{e^{(\beta^TX_i -\Delta_{rescaling})}}$
 
-- Note, in my implementation, I make `delta_recal` = $-\Delta_{rescaling} = ln[-ln(1-\theta_{target})] - ln[-ln(1-\theta_{derived})]$ (*i.e.* `outcome_mean_target_clog_log - outcome_mean_original_clog_log`).
+- Note, in my implementation, I make `delta_recal` = $-\Delta_{rescaling} = ln[-ln(1-\theta_{target})] - ln[-ln(1-\theta_{derived})]$ (*i.e.* `outcome_mean_target_cloglog - outcome_mean_original_cloglog`).
 
 - In summary, with `delta_recal`, the predictions will be updated as follows (see `center_predict`):
 
@@ -399,34 +424,22 @@ recalibrateList <- center_recalibrate(centerList, newdata = target, timeHorizon 
 fit.c.recalibrated <- recalibrateList$centerList$fit.c # this is still fit.c
 
 # check the results
-surv_fit_original <- survfit(Surv(ryear, rfs) ~ 1, data = original)
-outcome_mean_original <- 1 - summary(surv_fit_original, times = timeHorizon)$surv
-outcome_mean_original_clog_log <- log(-log(1-outcome_mean_original)) 
+prob_original_model <- mean(center_predict(centerList, newdata = original, type = "probability", times = timeHorizon))
+prob_original_model_cloglog <- log(-log(1-prob_original_model)) 
+print(paste0("Original, average event probability at year 3: ", prob_original_model))
+print(paste0("Clog-log: ", prob_original_model_cloglog))
+
+survfit_original_KM <- survfit(Surv(ryear, rfs) ~ 1, data = original)
+prob_original_KM <- 1 - summary(survfit_original_KM, times = timeHorizon)$surv
+prob_original_KM_cloglog <- log(-log(1-prob_original_KM)) 
+print(paste0("Original, KM event probability at year 3: ", prob_original_KM))
+print(paste0("Clog-log: ", prob_original_KM_cloglog))
       
-surv_fit_target <- survfit(Surv(ryear, rfs) ~ 1, data = target)
-outcome_mean_target <- 1 - summary(surv_fit_target, times = timeHorizon)$surv
-outcome_mean_target_logit <- log(outcome_mean_target / (1 - outcome_mean_target))
-outcome_mean_target_clog_log <- log(-log(1-outcome_mean_target))
-
-print(paste0("Outcome mean in original: ", outcome_mean_original))
-print(paste0("Outcome mean in target: ", outcome_mean_target))
-print(paste0("Clog-log of outcome mean in original: ", outcome_mean_original_clog_log))
-print(paste0("Clog-log of outcome mean in target: ", outcome_mean_target_clog_log))
-print(paste0("Difference in outcome mean: ", outcome_mean_target - outcome_mean_original))
-print(paste0("Difference in clog-log of outcome mean: ", outcome_mean_target_clog_log - outcome_mean_original_clog_log))
-
-# check the difference between predicted lp 
-print("The global offset by recalibration:")
-(delta_recal <- recalibrateList$delta_recal)
-pred.c <- center_predict(centerList, newdata = target, type = "lp")
-pred.c.recalibrated <- center_predict(recalibrateList$centerList, newdata = target, type = "lp", delta_recal = delta_recal)
-cbind(head(pred.c), head(pred.c.recalibrated), head(pred.c.recalibrated - pred.c))
-
-# check the difference between predicted risk
-print(paste("Exp of the global offset by recalibration: ", exp(delta_recal)))
-pred.c <- center_predict(centerList, newdata = target, type = "risk")
-pred.c.recalibrated <- center_predict(recalibrateList$centerList, newdata = target, type = "risk", delta_recal = delta_recal)
-cbind(head(pred.c), head(pred.c.recalibrated), head(pred.c.recalibrated/pred.c))
+survfit_target_KM <- survfit(Surv(ryear, rfs) ~ 1, data = target)
+prob_target_KM <- 1 - summary(survfit_target_KM, times = timeHorizon)$surv
+prob_target_KM_cloglog <- log(-log(1-prob_target_KM)) 
+print(paste0("Target, KM event probability at year 3: ", prob_target_KM))
+print(paste0("Clog-log: ", prob_target_KM_cloglog))
 ```
 
 # Calibration plots
@@ -444,10 +457,6 @@ Function `CalibrationCurves::valProbSurvival` is modified as `valProbSurvival.2`
 1.  See "3.1_Test_new_functions.qmd" that varified the two function produce identical results (the only thing lacking in `valProbSurvival.2` is the se and confidence interval for brier scores).
 
 2.  For centered models with `centerList`, `valProbSurvival.2` is called through a wrapper function `calibration.surv`.
-
-```{r}
-source("R/calibration.surv.R", echo = FALSE) # Modified function for cox models
-```
 
 ```{r}
 # The original model using Method 1
@@ -482,15 +491,87 @@ res.2 <- calibration.surv(
 ```
 
 ```{r}
-# The recalibrated model, indicated by `delta_recal`: the linear one
-res.3 <- calibration.surv(
+# The recalibrated model, indicated by `delta_recal_model`: the linear one
+delta_recal_model <- prob_target_KM_cloglog - prob_original_model_cloglog
+print(paste0("delta_recal_model: ", delta_recal_model))
+
+res.recal.model <- calibration.surv(
   centerList,
   newdata = target,
   timeHorizon = timeHorizon,
-  delta_recal = delta_recal,
+  delta_recal = delta_recal_model,
   plotCal = "ggplot",
   nk = 5
 )
+```
+
+```{r}
+# The recalibrated model, indicated by `delta_recal_KM`: the linear one
+delta_recal_KM <- prob_target_KM_cloglog - prob_original_KM_cloglog
+print(paste0("delta_recal_KM: ", delta_recal_KM))
+
+res.recal.KM <- calibration.surv(
+  centerList,
+  newdata = target,
+  timeHorizon = timeHorizon,
+  delta_recal = delta_recal_KM,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+(2026-08-26) Based on the methods used in [SCORE2 risk prediction algorithms for CVD](doi:10.1093/eurheartj/ehab309), instead of single summary stats, we can create a vector for multiple age categories (also separated by sex if the model was sex-stratified) to enable Platt scaling using unlinked summary stats.
+
+```{r}
+summary(testDataSurvival$age)
+
+df <- target
+# Prepare data: dummy, interacteration, rcs, centering
+df <- center_prepare(centerList, df)$data
+
+test
+# add age
+df$age <- testDataSurvival$age
+# bin age and 
+df <- df %>%
+  mutate(
+    cage = cut(
+      age,
+      breaks = c(20, seq(40, 65, 5), 80)
+    )
+  ) 
+table(df$cage)
+
+# observed event probability in each age group at timeHorizon
+fit.obs <- coxph(Surv(ryear, rfs) ~ cage, data = df)
+surv.fit <- survfit(fit.obs, newdata = df)
+pred.survival <- t(summary(surv.fit, times = timeHorizon)$surv)
+df$pred.prob <- 1 - pred.survival
+
+# Prepare data: dummy, interacteration, rcs, centering
+
+
+df_unique <- df %>% 
+  distinct(cage, pred.prob)
+
+# get mean values for each variables in each age group
+df2 <- df %>%
+  select(-c(ryear, rfs, pred.prob)) %>% 
+  group_by(cage) %>%
+  summarise_all(mean)
+df2$age_min <- rep(0, nrow(df2))
+df2$age_max <- rep(0, nrow(df2))
+df2$age_center <- rep(0, nrow(df2))
+for (i in 1:nrow(df2)) {
+  vec <- as.numeric(str_extract_all(df2$cage[i], "\\d+")[[1]])
+  df2$age_min[i] <- vec[1]
+  df2$age_max[i] <- vec[2]
+  df2$age_center[i] <- mean(vec)
+}
+df2 <- df2 %>% left_join(df_unique, by = "cage")
+
+df2$pred_lp <- center_predict(centerList, newdata = df, type = "lp")
+df2$pred_prob <- center_predict(centerList, newdata = df, type = "probability", times = timeHorizon)
 ```
 
 **Note:** the `offset(lp)` method doesn't work here
@@ -510,7 +591,7 @@ pred.prob.brier <- 1 - t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
 outcome.time <- target$ryear
 outcome.event <- target$rfs
 
-res.4 <- valProbSurvival.2(
+res.Platt <- valProbSurvival.2(
   pred.lp,
   pred.prob,
   pred.prob.brier,
@@ -525,49 +606,12 @@ res.4 <- valProbSurvival.2(
 ```{r}
 res.1$stats$Calibration$Statistics
 res.2$stats$Calibration$Statistics
-res.3$stats$Calibration$Statistics
-res.4$stats$Calibration$Statistics
-```
-
-```{r}
-for (timeHorizon in times) {
-  recalibrateList <- center_recalibrate(
-    centerList,
-    newdata = target,
-    timeHorizon = timeHorizon
-  )
-  delta_recal <- recalibrateList$delta_recal
-
-  # original model
-  res.2 <- calibration.surv(
-    centerList,
-    newdata = target,
-    timeHorizon = timeHorizon,
-    plotCal = "ggplot",
-    nk = 5
-  )
-
-  # recalibrated model
-  res.3 <- calibration.surv(
-    centerList,
-    newdata = target,
-    timeHorizon = timeHorizon,
-    delta_recal = delta_recal,
-    plotCal = "ggplot",
-    nk = 5
-  )
-  print(paste0("Recalibrate at year: ", timeHorizon))
-  print(paste0("Shift at that year: ", delta_recal))
-  print(res.2$stats$Calibration$Statistics)
-  print(res.3$stats$Calibration$Statistics)
-}
+res.recal.model$stats$Calibration$Statistics
+res.recal.KM$stats$Calibration$Statistics
+res.Platt$stats$Calibration$Statistics
 ```
 
 ## Subgroup
-
-```{r}
-source("R/calibration.OvsP.R", echo = FALSE) # Bar plot of observed vs predicted in each subgroup
-```
 
 ### Adding a grouping variable: categorical
 

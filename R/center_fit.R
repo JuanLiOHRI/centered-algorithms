@@ -1,9 +1,3 @@
-require(dplyr)
-require(stringr)
-require(survival)
-
-source("R/center_prepare.R", echo = FALSE) 
-
 #' Main function to fit a centered model based on the original model before centering
 #' Currently consider the following types:
 #' Categorical (with dummy)

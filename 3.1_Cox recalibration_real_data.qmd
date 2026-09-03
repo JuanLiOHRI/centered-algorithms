@@ -1,0 +1,602 @@
+---
+title: "Comparing different re-calibration methods: coxph"
+author: "Juan Li"
+date: 2026-08-27
+format: 
+  html:
+    toc: true
+    html-math-method: katex
+    css: styles.css
+editor: visual
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| output: false
+#| echo: false
+
+# ======== For unknown issue of connecting to R server in positron, load all packages and source code here =========
+library(rms)
+library(Hmisc)
+library(dplyr)
+library(stringr)
+library(survival)
+library(ggplot2)
+library(ggpubr) 
+library(CalibrationCurves)
+library(riskRegression)
+library(ggsurvfit)
+library(gtsummary)
+library(timeROC)
+
+# Prepare data for the centered algorithm
+source("R/center_prepare.R", echo = FALSE) 
+# Proper centering of the original model, with sufficient but light-weighted model outputs
+source("R/center_fit.R", echo = FALSE) 
+# Predicting on the centered model
+source("R/center_pred.R", echo = FALSE) 
+# Recalibrating the centered model using summary stats in a `newdata`
+source("R/center_recalibrate.R", echo = FALSE) 
+# Wrapper function for calibration curves and metrics
+# Including the following functions: `calibration`, `calibration.con`, `calibration.OvsP`
+source("R/calibration.R", echo = FALSE)
+# Modified function for cox models
+source("R/calibration.surv.R", echo = FALSE) 
+source("R/calibration_curve_cox.R", echo = FALSE) # valProbSurvival.2
+```
+
+# Breast Cancer Survival Data from Rotterdam and Germany
+
+See `?CalibrationCurves::trainDataSurvival`.
+
+```{r}
+#| echo: false
+
+# variables for `time` and `status` are `ryear` and `rfs`, respectively
+data(trainDataSurvival) # Rotterdam
+
+original <- trainDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2, age)
+target <- testDataSurvival %>% select(ryear, rfs, csize, cnode, grade3, pgr2, age)
+summary(original)
+summary(target)
+```
+
+## Fitting the centered model
+
+```{r}
+#| echo: false
+
+# The original model
+fit.o.c <- coxph(Surv(ryear, rfs) ~ csize + cnode + grade3 + age + csize * rcs(pgr2,3), data = original,
+  # make the model most light-weighted and meet requirements of the secured environment
+  model = FALSE, x = FALSE, y = FALSE,
+  # also center on dummy variables
+  nocenter = NULL) 
+```
+
+## Comparing different methods to re-calibrate the centered model to a new dataset
+
+Kaplan-Meier plots: [resource](https://www.emilyzabor.com/survival-analysis-in-r.html), which shows that at time = 3, the original data has higher survival probability, thus lower event probability, than the target data.
+
+```{r}
+#| echo: false
+
+data <- bind_rows(
+  trainDataSurvival %>% select(ryear, rfs) %>% mutate(type = "original"),
+  testDataSurvival %>% select(ryear, rfs) %>% mutate(type = "target")
+)
+data$type <- factor(data$type, levels = c("original", "target"))
+
+survfit2(Surv(ryear, rfs) ~ type, data = data) %>% 
+  ggsurvfit() +
+  add_confidence_interval() +
+  add_risktable()+
+  ylim(0,1)
+```
+
+### Calibration of the original centered model on `target`
+
+```{r}
+#| echo: false
+
+timeHorizon <- 3
+
+pred.lp.o <- predict(fit.o.c, target, type = "lp")
+surv.fit <- survfit(fit.o.c, newdata = target)
+pred.prob.o <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
+pred.prob.brier.o <- 1 - t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
+outcome.time <- target$ryear
+outcome.event <- target$rfs
+
+res.o <- valProbSurvival.2(
+  pred.lp.o,
+  pred.prob.o,
+  pred.prob.brier.o,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+### Recalibration with single shift: `delta_recal_KM`
+
+Based on methods in [Liu *et al*, 2025](https://doi.org/10.1016/j.jclinepi.2025.111895).
+
+1.  Suppose the probability of event at a specific `timeHorizon`, is $\theta = 1 - S_{KM}(timeHorizon)$, then
+
+- Observed risk for derivation population is $\theta_{derived} = 1 - S^{derived}_{KM}(timeHorizon)$
+
+- Observed risk for target population is $\theta_{target} = 1 - S^{target}_{KM}(timeHorizon)$
+
+2.  The rescaling factor proposed in the paper was $\Delta_{rescaling} = ln[-ln(1-\theta_{derived})] - ln[-ln(1-\theta_{target})]$.
+
+3.  Then, the recalibrated risk is $risk_{recal} = 1 - exp(-exp(ln[-ln(1-risk_{ori})]-\Delta_{rescaling}))$.
+
+4.  Let's substitute $S_{recal} = 1 - risk_{recal}$ and $S_{ori} = 1 - risk_{ori}$ into the equation, then
+
+$$\begin{aligned}
+S_{recal} &= exp(-exp(ln[-ln(S_{ori})]-\Delta_{rescaling})) \\
+          &= e^{-e^{ln[-ln(S_{ori})]-\Delta_{rescaling}}} \\
+          &= e^{-e^{ln[-ln(S_{ori})]}e^{-\Delta_{rescaling}}} \\
+          &= [e^{-e^{ln[-ln(S_{ori})]}}]^{e^{-\Delta_{rescaling}}} \\
+          &= [e^{ln(S_{ori})}]^{e^{-\Delta_{rescaling}}} \\
+          &= [S_{ori}]^{e^{-\Delta_{rescaling}}}
+\end{aligned}$$
+
+5.  In Cox, the survival function is $S(t|X_i) = [S_0(t)]^{exp(LP)}$. Therefore, the equation above can be written as
+
+$$\begin{aligned}
+S_{recal} &= [S_{ori}]^{e^{-\Delta_{rescaling}}} \\
+          &= ([S_{0,ori}(t)]^{e^{LP}})^{e^{-\Delta_{rescaling}}} \\
+          &= S_{0,ori}(t)^{e^{LP}e^{-\Delta_{rescaling}}} \\
+          &= S_{0,ori}(t)^{e^{(LP -\Delta_{rescaling})}}
+\end{aligned}$$
+
+i.e. $LP_{recal} = LP_{ori} -\Delta_{rescaling}$
+
+6.  Note, in my implementation, I make
+
+`delta_recal` = $-\Delta_{rescaling} = ln[-ln(1-\theta_{target})] - ln[-ln(1-\theta_{derived})]$. Therefore:
+
+$S_{recal} = [S_{ori}]^{e^{delta.recal}}$
+
+$LP_{recal} = LP_{ori}+delta.recal$
+
+```{r}
+#| echo: false
+
+survfit_original_KM <- survfit(Surv(ryear, rfs) ~ 1, data = original)
+prob_original_KM <- 1 - summary(survfit_original_KM, times = timeHorizon)$surv
+prob_original_KM_cloglog <- log(-log(1-prob_original_KM)) 
+print(paste0("Original, KM event probability at year 3: ", prob_original_KM))
+print(paste0("Clog-log: ", prob_original_KM_cloglog))
+      
+survfit_target_KM <- survfit(Surv(ryear, rfs) ~ 1, data = target)
+prob_target_KM <- 1 - summary(survfit_target_KM, times = timeHorizon)$surv
+prob_target_KM_cloglog <- log(-log(1-prob_target_KM)) 
+print(paste0("Target, KM event probability at year 3: ", prob_target_KM))
+print(paste0("Clog-log: ", prob_target_KM_cloglog))
+
+delta_recal_KM <- prob_target_KM_cloglog - prob_original_KM_cloglog
+print(paste0("delta_recal_KM: ", delta_recal_KM))
+
+# calibration of the recalibrated model
+pred.lp.recal <- pred.lp.o + delta_recal_KM
+pred.prob.recal <- 1 - (1 - pred.prob.o) ^ exp(delta_recal_KM)
+pred.prob.brier.recal <- 1 - (1 - pred.prob.brier.o) ^ exp(delta_recal_KM)
+
+# check
+pred.prob.recal.2 <- 1 - exp(-exp(log(-log(1 - pred.prob.o)) + delta_recal_KM))
+summary(pred.prob.recal.2 - pred.prob.recal)
+
+res.recal.KM <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+### Recalibration with single shift: `delta_recal_model_original`
+
+Main idea is similar to above, with some modifications of how to define $\Delta_{rescaling}$:
+
+1.  Suppose the probability of event at a specific `timeHorizon`, is $\theta = 1 - S_{KM}(timeHorizon)$, then
+
+- Average predicted risk for **derivation** population is $\theta_{derived} = \frac{\sum^{N_{derived}}_i{\theta_{i, predicted}}}{N_{derived}}$
+
+- Observed risk for target population is $\theta_{target} = 1 - S^{target}_{KM}(timeHorizon)$ (same as above)
+
+2.  The rescaling factor is $delta.recal = ln[-ln(1-\theta_{target})] - ln[-ln(1-\theta_{derived})]$.
+
+```{r}
+#| echo: false
+
+surv.fit.o <- survfit(fit.o.c, newdata = original)
+prob_original_model <- mean(1 - t(summary(surv.fit.o, times = timeHorizon)$surv))
+prob_original_model_cloglog <- log(-log(1-prob_original_model)) 
+print(paste0("Original, average event probability at year 3: ", prob_original_model))
+print(paste0("Clog-log: ", prob_original_model_cloglog))
+print(paste0("Target, KM event probability at year 3: ", prob_target_KM))
+print(paste0("Clog-log: ", prob_target_KM_cloglog))
+
+delta_recal_model_original <- prob_target_KM_cloglog - prob_original_model_cloglog
+print(paste0("delta_recal_model_original: ", delta_recal_model_original))
+
+# calibration of the recalibrated model
+pred.lp.recal <- pred.lp.o + delta_recal_model_original
+pred.prob.recal <- 1 - (1 - pred.prob.o) ^ exp(delta_recal_model_original)
+pred.prob.brier.recal <- 1 - (1 - pred.prob.brier.o) ^ exp(delta_recal_model_original)
+
+res.recal.model.original <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+### Recalibration with single shift: `delta_recal_model_target`
+
+Main idea is similar to above, with some modifications of how to define $\Delta_{rescaling}$:
+
+1.  Suppose the probability of event at a specific `timeHorizon`, is $\theta = 1 - S_{KM}(timeHorizon)$, then
+
+- Average predicted risk for **target** population is $\theta_{predicted} = \frac{\sum^{N_{target}}_i{\theta_{i, predicted}}}{N_{target}}$
+
+- Observed risk for target population is $\theta_{observed} = 1 - S^{target}_{KM}(timeHorizon)$ (same as above)
+
+2.  The rescaling factor is $delta.recal = ln[-ln(1-\theta_{observed})] - ln[-ln(1-\theta_{predicted})]$.
+
+```{r}
+#| echo: false
+
+prob_target_model <- mean(pred.prob.o)
+prob_target_model_cloglog <- log(-log(1-prob_target_model)) 
+print(paste0("Target, average event probability at year 3: ", prob_target_model))
+print(paste0("Clog-log: ", prob_target_model_cloglog))
+print(paste0("Target, KM event probability at year 3: ", prob_target_KM))
+print(paste0("Clog-log: ", prob_target_KM_cloglog))
+
+delta_recal_model_target <- prob_target_KM_cloglog - prob_target_model_cloglog
+print(paste0("delta_recal_model_target: ", delta_recal_model_target))
+
+# calibration of the recalibrated model
+pred.lp.recal <- pred.lp.o + delta_recal_model_target
+pred.prob.recal <- 1 - (1 - pred.prob.o) ^ exp(delta_recal_model_target)
+pred.prob.brier.recal <- 1 - (1 - pred.prob.brier.o) ^ exp(delta_recal_model_target)
+
+res.recal.model.target <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+### Recalibration with approximating Platt: method 1
+
+In this version, the predicted event probability in the averaged predicted probability in each age group within the target population. This is an extension of the `delta_recal_model` above, and loosely follows the methods in [SCORE2 risk prediction algorithms for CVD](doi:10.1093/eurheartj/ehab309), Supplementary Methods, Figure 2.
+
+1.  Calculate the predict event probability for target population at `timeHorizon`: $\theta_{pred}$.
+
+2.  Calculate the average within each age group: $\theta_{pred, agegroup} = mean_{agegroup}(\theta_{pred})$
+
+3.  Estimate observed event probability at `timeHorizon` within each age group:$\theta_{expect,agegroup}$
+
+4.  Regress the age-specific expected on predicted risks: $ln[-ln(1-\theta_{expect,agegroup})] = Scale1 + Scale2 \times ln[-ln(1-\theta_{pred, agegroup})]$
+
+5.  Then the recalibrated event probability is calculated as $\theta_{pred,new}=1-exp(-exp(Scale1 + Scale2 \times ln[-ln(1-\theta_{pred})]))$
+
+6.  Let's substitute $S_{pred,new} = 1 - risk_{pred,new}$ and $S_{pred} = 1 - risk_{pred} = S_0(t)^{exp(LP)}$ into the equation, then
+
+$$\begin{aligned}
+S_{pred,new} &= exp(-exp(Scale1 + Scale2 \times ln[-ln(S_{pred})])) \\
+          &= exp(-exp(Scale1 + Scale2 \times ln[-ln(S_0(t)^{exp(LP)})])) \\
+          &= exp(-exp(Scale1 + Scale2 \times ln[-exp(LP)ln(S_0(t))])) \\
+          &= exp(-exp(Scale1 + Scale2 \times (LP + ln[-ln(S_0(t))]))) 
+\end{aligned}$$ Therefore,
+
+$$\begin{aligned}
+ln(-ln(S_{pred,new})) &= ln(-ln(exp(-exp(Scale1 + Scale2 \times (LP + ln[-ln(S_0(t))]))))) \\
+          &= Scale1 + Scale2 \times (LP + ln[-ln(S_0(t))]) \\
+          &= Scale1 + Scale2 \times LP + Scale2 \times ln[-ln(S_0(t))]
+\end{aligned}$$
+
+Since $S_{pred,new} = S_0(t)^{exp(LP_{new})}$, we have
+
+$$\begin{aligned}
+ln(-ln(S_{pred,new})) &= ln(-ln(S_0(t)^{exp(LP_{new})})) \\
+          &= ln(-exp(LP_{new})ln(S_0(t))) \\
+          &= ln(exp(LP_{new})) + ln(-ln(S_0(t))) \\
+          &= LP_{new} + ln(-ln(S_0(t)))
+\end{aligned}$$
+
+Therefore, $LP_{new} + ln(-ln(S_0(t))) = Scale1 + Scale2 \times LP + Scale2 \times ln[-ln(S_0(t))]$, i.e.
+
+$LP_{new} = Scale1 + Scale2 \times LP + (Scale2-1) \times ln[-ln(S_0(t))]$
+
+```{r}
+#| echo: false
+
+df <- data.frame(
+  age = testDataSurvival$age,
+  theta_pred = pred.prob.o,
+  ryear = target$ryear,
+  rfs = target$rfs)
+
+# age groups
+df <- df %>%
+  mutate(
+    cage = cut(
+      age,
+      breaks = c(20, seq(40, 65, 5), 80)
+    )
+  ) 
+table(df$cage)
+
+# get mean values for each variables in each age group
+df2 <- df %>%
+  group_by(cage) %>%
+  summarise_all(mean)
+
+# observed event probability in each age group at timeHorizon
+survfit_cage_KM <- survfit(Surv(ryear, rfs) ~ cage, data = df)
+df2$theta_exp <- 1 - summary(survfit_cage_KM, times = timeHorizon)$surv
+df2$theta_pred_t <- log(-log(1-df2$theta_pred))
+df2$theta_exp_t <- log(-log(1-df2$theta_exp))
+
+ggplot(df2, aes(theta_pred, theta_exp))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  coord_fixed()+
+  xlim(0,1)+
+  ylim(0,1)
+
+# get the scaling factors
+fit <- lm(theta_exp_t ~ theta_pred_t, data = df2)
+fit
+scale1 <- coef(fit)[1]
+scale2 <- coef(fit)[2]
+
+# get baseline survival S_0(timeHorizon)
+base_surv <- survfit(fit.o.c)
+S_0 <- summary(base_surv, times = timeHorizon)$surv
+
+# get the recalibrated event probability at timeHorizon
+pred.prob.recal <- 1 - exp(-exp(scale1 + scale2*log(-log(1-pred.prob.o))))
+pred.prob.brier.recal <- 1 - exp(-exp(scale1 + scale2*log(-log(1-pred.prob.brier.o))))
+
+# get the recalibrated LP
+pred.lp.recal <- scale1 + scale2 * pred.lp.o + (scale2-1)*log(-log(S_0))
+
+# check
+summary(pred.prob.recal - (1 - S_0^exp(pred.lp.recal)))
+
+res.recal.model.agegroup <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+scale1_m1 <- scale1
+scale2_m1 <- scale2
+```
+
+Because age is not strongly associated with cancer risk in this dataset, especially the predicted risk are quite similar, recalibration using linear regression makes the calibration much worse. Below try the regression with `offset()`, i.e. only adjust the intercept instead.
+
+```{r}
+#| echo: false
+
+# Offset
+fit <- lm(theta_exp_t ~ offset(theta_pred_t), data = df2)
+fit
+delta_recal_model_agegroup <- coef(fit)[1]
+print(paste0("delta_recal_model_agegroup: ", delta_recal_model_agegroup))
+
+# calibration of the recalibrated model
+pred.lp.recal <- pred.lp.o + delta_recal_model_agegroup
+pred.prob.recal <- 1 - (1 - pred.prob.o) ^ exp(delta_recal_model_agegroup)
+pred.prob.brier.recal <- 1 - (1 - pred.prob.brier.o) ^ exp(delta_recal_model_agegroup)
+
+res.recal.model.agegroup.offset <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+### Recalibration with approximating Platt: method 2
+
+This method closely follows the methods in SCORE2, but it requires to unpack the data (dummy, rcs, interactions) and some modifications of the code.
+
+(2026-08-26) Based on the methods used in [SCORE2 risk prediction algorithms for CVD](doi:10.1093/eurheartj/ehab309), instead of single summary stats, we can create a vector for multiple age categories (also separated by sex if the model was sex-stratified) to enable Platt scaling using unlinked summary stats.
+
+```{r}
+#| echo: false
+
+# age groups
+df0 <- target %>%
+  mutate(
+    cage = cut(
+      age,
+      breaks = c(20, seq(40, 65, 5), 80)
+    )
+  ) 
+table(df0$cage)
+
+# The centered model, for variable means
+vec_mean <- fit.o.c$means
+# unpack the target data for the centered algorithm
+df <- center_prepare_0(fit.o.c, df0, center = TRUE, add.outcome = TRUE, means_ext = vec_mean)$data
+df$cage <- df0$cage
+
+# get mean values for each variables in each age group
+df2 <- df %>%
+  select(-c(ryear, rfs)) %>%
+  group_by(cage) %>%
+  summarise_all(mean)
+
+# get baseline survival S_0(timeHorizon)
+base_surv <- survfit(fit.o.c)
+S_0 <- summary(base_surv, times = timeHorizon)$surv
+
+# observed event probability in each age group at timeHorizon
+survfit_cage_KM <- survfit(Surv(ryear, rfs) ~ cage, data = df)
+df2$theta_exp <- 1 - summary(survfit_cage_KM, times = timeHorizon)$surv
+df2$theta_exp_t <- log(-log(1-df2$theta_exp))
+
+# predicted event probability in each age group at timeHorizon
+v_mat <- df2 |> select(contains("_C"))
+df2$LP <- as.matrix(v_mat) %*% coef(fit.o.c)
+df2$theta_pred <- 1 - S_0 ^ exp(df2$LP)
+df2$theta_pred_t <- log(-log(1-df2$theta_pred))
+
+ggplot(df2, aes(theta_pred, theta_exp))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  coord_fixed()+
+  xlim(0,1)+
+  ylim(0,1)
+
+# get the scaling factors
+fit <- lm(theta_exp_t ~ theta_pred_t, data = df2)
+fit
+scale1 <- coef(fit)[1]
+scale2 <- coef(fit)[2]
+
+# get the recalibrated event probability at timeHorizon
+pred.prob.recal <- 1 - exp(-exp(scale1 + scale2*log(-log(1-pred.prob.o))))
+pred.prob.brier.recal <- 1 - exp(-exp(scale1 + scale2*log(-log(1-pred.prob.brier.o))))
+
+# get the recalibrated LP
+pred.lp.recal <- scale1 + scale2 * pred.lp.o + (scale2-1)*log(-log(S_0))
+
+# check
+summary(pred.prob.recal - (1 - S_0^exp(pred.lp.recal)))
+
+res.recal.model.agegroup.2 <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+scale1_m2 <- scale1
+scale2_m2 <- scale2
+```
+
+Similar as above, check `offset()`.
+
+```{r}
+#| echo: false
+
+# Offset
+fit <- lm(theta_exp_t ~ offset(theta_pred_t), data = df2)
+fit
+delta_recal_model_agegroup_2 <- coef(fit)[1]
+print(paste0("delta_recal_model_agegroup_2: ", delta_recal_model_agegroup_2))
+
+# calibration of the recalibrated model
+pred.lp.recal <- pred.lp.o + delta_recal_model_agegroup_2
+pred.prob.recal <- 1 - (1 - pred.prob.o) ^ exp(delta_recal_model_agegroup_2)
+pred.prob.brier.recal <- 1 - (1 - pred.prob.brier.o) ^ exp(delta_recal_model_agegroup_2)
+
+res.recal.model.agegroup.2.offset <- valProbSurvival.2(
+  pred.lp.recal,
+  pred.prob.recal,
+  pred.prob.brier.recal,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+### Recalibration with Platt scaling
+
+All above recalibration methods don't require the `target` dataset be linked to outcome variables. Only this Platt scaling requires data linkage.
+
+**Note:** the `offset(lp)` method doesn't work here
+
+```{r}
+#| echo: false
+
+# update intercept using Platt's calibration, which requires linked individual-level newdata
+# Use `valProbSurvival.2` directly here
+target$LP <- pred.lp.o
+fit.platt <- coxph(Surv(ryear, rfs) ~ LP, data = target,
+model = FALSE, x = FALSE, y = FALSE)
+fit.platt
+
+pred.lp <- predict(fit.platt, target, type = "lp")
+surv.fit <- survfit(fit.platt, newdata = target)
+pred.prob <- 1 - t(summary(surv.fit, times = timeHorizon)$surv)
+pred.prob.brier <- 1 - t(summary(surv.fit, times = timeHorizon - 0.01)$surv)
+outcome.time <- target$ryear
+outcome.event <- target$rfs
+
+res.Platt <- valProbSurvival.2(
+  pred.lp,
+  pred.prob,
+  pred.prob.brier,
+  outcome.time,
+  outcome.event,
+  timeHorizon = timeHorizon,
+  plotCal = "ggplot",
+  nk = 5
+)
+```
+
+```{r}
+#| echo: false
+
+res.o$stats$Calibration$Statistics
+print(paste0("delta_recal_KM: ", delta_recal_KM))
+res.recal.KM$stats$Calibration$Statistics
+print(paste0("delta_recal_model_original: ", delta_recal_model_original))
+res.recal.model.original$stats$Calibration$Statistics
+print(paste0("delta_recal_model_target: ", delta_recal_model_target))
+res.recal.model.target$stats$Calibration$Statistics
+print(paste0("scale1: ", scale1_m1, "; scale2: ", scale2_m1))
+res.recal.model.agegroup$stats$Calibration$Statistics
+print(paste0("delta_recal_model_agegroup: ", delta_recal_model_agegroup))
+res.recal.model.agegroup.offset$stats$Calibration$Statistics
+print(paste0("scale1: ", scale1_m2, "; scale2: ", scale2_m2))
+res.recal.model.agegroup.2$stats$Calibration$Statistics
+print(paste0("delta_recal_model_agegroup_2: ", delta_recal_model_agegroup_2))
+res.recal.model.agegroup.2.offset$stats$Calibration$Statistics
+res.Platt$stats$Calibration$Statistics
+```
+
+```{r}
+
+```

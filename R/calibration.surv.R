@@ -1,12 +1,3 @@
-require(dplyr)
-require(stringr)
-require(Hmisc)
-
-source("R/valProbSurvival.2.R", echo = FALSE) 
-source("R/valProbSurvival.fg.R", echo = FALSE) 
-
-source("R/center_predict.R", echo = FALSE) 
-
 #' The outter layer function to call `calibration.surv.core` then `valProbSurvival.2` below for Cox PH model
 #'
 #' @param centerList The returned list from `fit_center`

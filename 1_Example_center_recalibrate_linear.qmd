@@ -15,12 +15,25 @@ editor: visual
 #| message: false
 #| output: false
 
+# ======== For unknown issue of connecting to R server in positron, load all packages and source code here =========
+library(rms)
+library(dplyr)
+library(stringr)
+library(survival)
+library(ggplot2)
+library(ggpubr) 
+
+# Prepare data for the centered algorithm
+source("R/center_prepare.R", echo = FALSE) 
 # Proper centering of the original model, with sufficient but light-weighted model outputs
 source("R/center_fit.R", echo = FALSE) 
 # Predicting on the centered model
-source("R/center_predict.R", echo = FALSE) 
+source("R/center_pred.R", echo = FALSE) 
 # Recalibrating the centered model using summary stats in a `newdata`
 source("R/center_recalibrate.R", echo = FALSE) 
+# Wrapper function for calibration curves and metrics
+# Including the following functions: `calibration`, `calibration.con`, `calibration.OvsP`
+source("R/calibration.R", echo = FALSE)
 ```
 
 # Dataset: Medical Cost Personal Datasets
@@ -157,10 +170,6 @@ Calibration plot is not commonly done for linear regression, since the compariso
 ## Overall
 
 ```{r}
-source("R/calibration.R", echo = FALSE) # the wrapper function for calibration curves and metrics
-```
-
-```{r}
 labelPos.x <- 2000
 labelPos.y <- 53000
 
@@ -216,10 +225,6 @@ calibration(
 ```
 
 ## Subgroup
-
-```{r}
-source("R/calibration.OvsP.R", echo = FALSE) # Bar plot of observed vs predicted in each subgroup
-```
 
 In the current version, if we want to see the calibration for subgroups. The default is scatter plot.
 

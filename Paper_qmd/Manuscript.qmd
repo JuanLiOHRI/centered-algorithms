@@ -91,9 +91,9 @@ csl: nature.csl
 
 **Two terminal commends**
 
--   Global: `quarto install tinytex`
+- Global: `quarto install tinytex`
 
--   In the project folder: `quarto add vgreg/quarto-comments`
+- In the project folder: `quarto add vgreg/quarto-comments`
 
 ## Introduction {#sec-intro}
 
@@ -120,13 +120,13 @@ Two key consequences of the centering transformation are that the centered inter
 \scriptsize
 
 | Model | Link function $g(\mu)$ | Centered linear predictor | Interpretation of $\tilde{\alpha}$ |
-|----|----|----|----|
+|------------------|------------------|------------------|------------------|
 | Linear regression | Identity: $\mu$ | $y=\tilde{\alpha} + \sum_{j}\beta_j(x_j-\bar{x}_j)$ | sample mean outcome |
 | Logistic regression | Logit: $ln(\frac{p}{1-p})$ | $logit(p)=\tilde{\alpha} + \sum_{j}\beta_j(x_j-\bar{x}_j)$ | log-odds at average covariates |
 | Poisson regression | Log: $ln(\lambda)$ | $ln(\lambda)=\tilde{\alpha} + \sum_{j}\beta_j(x_j-\bar{x}_j)$ | log-rate at average covariates |
 | Cox PH model | Log-hazard: $ln[h(t)]$ | $h(t)=h_0(t)exp[\sum_{j}\beta_j(x_j-\bar{x}_j)]$ | $h_0(t)$ is the baseline hazard for the average subject |
 
-: Interpretation of the centered intercept across model families {#tbl-1} {tbl-colwidths="\[20,20,30,30\]"}
+: Interpretation of the centered intercept across model families {#tbl-1}
 
 \normalsize
 
@@ -159,7 +159,7 @@ Two properties of the `recipes` workflow are critical for reproducibility. First
 \scriptsize
 
 | Component | Required for implementation | Required for re-calibration |
-|----|:--:|:--:|
+|------------------------|:----------------------:|:----------------------:|
 | Link function $g(·)$ | Yes | Yes |
 | Intercept of the centered model $\tilde{\alpha}$ | Yes | Yes |
 | Model coefficients ($\beta$ of all transformed terms) | Yes | Yes |
@@ -169,7 +169,7 @@ Two properties of the `recipes` workflow are critical for reproducibility. First
 | Covariance or correlation + standard deviation of predictors[^1] | Yes | Yes |
 | Histogram or frequency table of continuous predictors[^2] | Yes | Yes |
 
-: Information required for model implementation and re-calibration {#tbl-2} {tbl-colwidths="\[55,20,25\]"}
+: Information required for model implementation and re-calibration {#tbl-2}
 
 [^1]: Only required if mean value of the corresponding interaction term was not available.
 

@@ -1,4 +1,5 @@
-require("dplyr")
+library("dplyr")
+library("ggplot2")
 
 # Create a wrapper function to compare calibration under different noise to data ratio
 compare <- function(data, sd_noise, seed) {
